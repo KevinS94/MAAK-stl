@@ -1,0 +1,62 @@
+name: Deploy naar GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository uitchecken
+        uses: actions/checkout@v4
+
+      - name: Node.js instellen
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Afhankelijkheden installeren
+        run: npm ci
+
+      - name: TypeScript-controle
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Productiebuild
+        run: npm run build
+        env:
+          # De site draait onder https://<gebruiker>.github.io/<repository>/
+          BASE_PATH: /${{ github.event.repository.name }}/
+
+      - name: Pages configureren
+        uses: actions/configure-pages@v5
+
+      - name: dist-map uploaden
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publiceren naar GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

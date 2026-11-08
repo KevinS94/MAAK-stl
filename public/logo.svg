@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 98 32" width="98" height="32" role="img" aria-label="MAAK!">
+  <!-- Tijdelijke typografische MAAK!-wordmark. Vervang dit bestand door het officiële logo (zelfde bestandsnaam). -->
+  <g fill="none" stroke="#1c1c1e" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt">
+    <path d="M4.5 28V5.5L12 18l7.5-12.5V28"/>
+    <path d="M26.5 28.5 35 4.5l8.5 24M30 20h10"/>
+    <path d="M48.5 28.5 57 4.5l8.5 24M52 20h10"/>
+    <path d="M72.5 4v24.5M86 4 75.5 16 86 28.5"/>
+  </g>
+  <path d="M90.5 4h5v16h-5z M90.5 24h5v4.5h-5z" fill="#f26b1d"/>
+</svg>

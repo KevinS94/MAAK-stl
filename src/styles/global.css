@@ -1,0 +1,107 @@
+:root {
+  /* MAAK!-huisstijl */
+  --accent: #f26b1d;
+  --accent-hover: #e05c10;
+  --accent-active: #c9500c;
+  --accent-soft: #fff1e8;
+  --accent-ring: rgba(242, 107, 29, 0.28);
+
+  --text: #1c1c1e;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #9a9aa0;
+  --border: #e6e6e8;
+  --border-strong: #d4d4d8;
+  --surface: #ffffff;
+  --surface-muted: #f7f7f8;
+  --success: #1f8a4c;
+  --danger: #c4321f;
+  --danger-soft: #fdf0ee;
+
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 20px;
+  --shadow-card: 0 1px 2px rgba(16, 16, 20, 0.04), 0 8px 28px rgba(16, 16, 20, 0.05);
+  --shadow-soft: 0 1px 2px rgba(16, 16, 20, 0.06);
+
+  --font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  color-scheme: light;
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--surface);
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
+img {
+  max-width: 100%;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
