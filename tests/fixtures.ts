@@ -48,4 +48,17 @@ export const SVG = {
   donut: wrap('<path fill-rule="evenodd" d="M50 10 A40 40 0 1 1 49.99 10 Z M50 30 A20 20 0 1 0 50.01 30 Z"/>'),
   entity: '<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY a "aaaa">]><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="30"/></svg>',
   broken: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50"',
+  /** Gesloten buitencontour (blad) + drie open "nerven" als stempeldetail. */
+  leafWithVeins: wrap(
+    '<path d="M50 88 C22 72,10 45,25 18 C35 3,65 3,75 18 C90 45,78 72,50 88 Z" fill="#2e7d32"/>' +
+      '<path d="M50 80 L50 15" fill="none" stroke="#1b4d1b" stroke-width="1.5"/>' +
+      '<path d="M50 55 L28 32" fill="none" stroke="#1b4d1b" stroke-width="1.5"/>' +
+      '<path d="M50 55 L72 32" fill="none" stroke="#1b4d1b" stroke-width="1.5"/>',
+  ),
+  /** Gesloten buitencontour + één gesloten detailpad (ring), voor het testen van annulus-reliëf. */
+  circleWithClosedDetail: wrap('<circle cx="50" cy="50" r="40"/><circle cx="50" cy="50" r="20" fill="none" stroke="#000" stroke-width="1"/>'),
+  /** Enkel open lijnen, geen gesloten vorm: geen geldige buitencontour mogelijk. */
+  onlyOpenLines: wrap('<path d="M10 10 L90 10" fill="none" stroke="#000" stroke-width="1"/><path d="M10 90 L90 90" fill="none" stroke="#000" stroke-width="1"/>'),
+  /** Smalle strook (90 × 16 mm): genoeg oppervlak voor reliëf, te smal voor een handvat van 20 mm. */
+  thinStrip: wrap('<rect x="5" y="42" width="90" height="16"/>'),
 };

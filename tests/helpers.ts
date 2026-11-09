@@ -1,11 +1,28 @@
 import { buildContourOrThrow } from '../src/engine/contourProcessing';
-import { parseSvgOrThrow } from '../src/engine/svgParser';
-import type { FrameSizeMm, MeshData, ValidatedContour } from '../src/engine/types';
+import { parseSvgOrThrow, parseSvgPathsOrThrow } from '../src/engine/svgParser';
+import { buildSelectionOrThrow, defaultRoles, extractPathCandidates, type ContourSelection } from '../src/engine/svgPaths';
+import type { FrameSizeMm, MeshData, PathRole, SvgPathCandidate, ValidatedContour } from '../src/engine/types';
 
 export const BASIC: FrameSizeMm = { length: 100, width: 100 };
 
 export function contourOf(svg: string, frame: FrameSizeMm = BASIC): ValidatedContour {
   return buildContourOrThrow(parseSvgOrThrow(svg), frame);
+}
+
+/**
+ * Bouwt een volledige padselectie (buitencontour + uitgelijnde details) uit
+ * een SVG met meerdere vectorpaden/open lijnen, met de automatisch
+ * voorgestelde rollen, of een aangepaste roltoewijzing via `roleOf`.
+ */
+export function selectionOf(
+  svg: string,
+  frame: FrameSizeMm = BASIC,
+  roleOf?: (candidate: SvgPathCandidate) => PathRole,
+): ContourSelection {
+  const raw = parseSvgPathsOrThrow(svg);
+  const candidates = extractPathCandidates(raw, frame);
+  const roles = roleOf ? Object.fromEntries(candidates.map((c) => [c.id, roleOf(c)])) : defaultRoles(candidates);
+  return buildSelectionOrThrow(candidates, roles, frame);
 }
 
 /** Leest een binary STL in en levert een geïndexeerde mesh op exacte float32-posities. */

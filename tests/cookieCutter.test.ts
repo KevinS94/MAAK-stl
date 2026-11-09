@@ -81,7 +81,7 @@ describe('cookie cutter: parameters en randgevallen', () => {
   it('te smalle vorm geeft een foutmelding in plaats van foute geometrie', () => {
     const contour = contourOf(SVG.tiny); // 2 × 2 mm
     expect(() => buildCookieCutter(contour, P)).toThrow(GeometryError);
-    const r = cookieCutterGenerator.generate(contour, P);
+    const r = cookieCutterGenerator.generate(contour, [], P);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('SHAPE_TOO_NARROW');
@@ -105,13 +105,13 @@ describe('cookie cutter: parameters en randgevallen', () => {
     // de drukrand zou de spleet dichten en een losse holte insluiten.
     const svg =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M10 10 H90 V49 H70 V30 H30 V70 H70 V51 H90 V90 H10 Z"/></svg>';
-    const r = cookieCutterGenerator.generate(contourOf(svg), P);
+    const r = cookieCutterGenerator.generate(contourOf(svg), [], P);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('FLARE_INVALID');
   });
 
   it('ongeldige parameters worden geweigerd', () => {
-    const r = cookieCutterGenerator.generate(contourOf(SVG.square), { ...P, wallThickness: 0 });
+    const r = cookieCutterGenerator.generate(contourOf(SVG.square), [], { ...P, wallThickness: 0 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('INVALID_PARAMETERS');
   });
