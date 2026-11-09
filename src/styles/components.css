@@ -336,6 +336,101 @@
   font-size: 0.8rem;
 }
 
+/* ---------- Padselector ---------- */
+.path-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.path-selector__hint {
+  color: var(--text-secondary);
+  font-size: 0.825rem;
+}
+
+.path-selector__body {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.path-selector__svg {
+  width: 180px;
+  height: 180px;
+  flex: none;
+  background: var(--surface-muted);
+  border-radius: var(--radius-sm);
+}
+
+.path-selector__path {
+  cursor: pointer;
+}
+
+.path-selector__list {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.path-selector__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+.path-selector__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.path-selector__name {
+  flex: 1;
+  color: var(--text-secondary);
+}
+
+.path-selector__role {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+/* ---------- Modelwissel (Cutter & Stempel) ---------- */
+.model-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  align-self: flex-start;
+}
+
+.model-switch__option {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.model-switch__option.is-active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow-soft), 0 0 0 1px var(--border);
+}
+
 .examples {
   color: var(--text-tertiary);
   font-size: 0.85rem;
@@ -412,6 +507,27 @@
 }
 
 /* ---------- Parameters ---------- */
+.params-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.params-group {
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.params-group__legend {
+  padding: 0 4px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
 .params {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -657,6 +773,12 @@
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
+}
+
+.result__downloads {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .download__name {
