@@ -10,14 +10,21 @@
  *    technische hulpgeometrie hoeft te klikken. Elk onderdeel krijgt een
  *    voorgestelde rol: buitencontour / stempeldetail / negeren.
  *
+ *    Naast de rol krijgt elk onderdeel een interpretatie: gesloten vorm of
+ *    middellijn (zie `PathInterpretation`). Open lijnen en smalle
+ *    bandvormen krijgen standaard "middellijn" voorgesteld.
+ *
  * C. Validatie: pas NADAT de rollen gekend zijn, wordt gecontroleerd of de
  *    gekozen buitencontour één samenhangende, gesloten vorm oplevert. Een
- *    SVG met meerdere losse vormen is op zich dus nooit een fout.
+ *    middellijn wordt daarvoor eerst tot een band met de vormdikte
+ *    verbreed. Een SVG met meerdere losse vormen is op zich dus nooit een
+ *    fout.
  */
 import type { PathsD } from 'clipper2-ts';
-import { GEOMETRY } from '../config/defaults';
+import { CENTERLINE, GEOMETRY } from '../config/defaults';
+import { bandAroundCenterline, elongation, extractCenterline, meanBandWidth, type CenterlinePath } from './centerline';
 import { fail, toResult } from './errors';
-import { pointInRing, ringBounds, signedArea } from './geometry2d';
+import { ensureCCW, pointInRing, ringBounds, signedArea } from './geometry2d';
 import type { SampleBudget } from './contourProcessing';
 import { finalizeOuterRing, sampleSubPath } from './contourProcessing';
 import {
@@ -25,8 +32,10 @@ import {
   differencePaths,
   intersectPaths,
   islandsToPaths,
+  offsetOpenPolyline,
   pathsArea,
   pointInPaths,
+  regionToPaths,
   splitIslands,
   toClipperFillRule,
   unionPaths,
@@ -38,6 +47,7 @@ import type {
   Bounds2,
   DetailLine,
   FrameSizeMm,
+  PathInterpretation,
   PathRole,
   Point2,
   Result,
@@ -293,6 +303,8 @@ function regionCandidate(id: string, members: RegionPiece[]): SvgPathCandidate {
     lengthMm: polylineLength(ring, true),
     bounds: ringBounds(outers.flat()),
     paint: members[0].element.paint,
+    bandWidthMm: meanBandWidth({ outers, holes }),
+    bandLike: false,
     suggestedRole: 'ignore',
   };
 }
@@ -312,6 +324,8 @@ function lineCandidate(p: LinePiece): SvgPathCandidate {
     lengthMm: polylineLength(p.points, p.closed),
     bounds: ringBounds(p.points),
     paint: p.element.paint,
+    bandWidthMm: 0,
+    bandLike: false,
     suggestedRole: 'ignore',
   };
 }
@@ -348,18 +362,76 @@ function usableAsOuter(c: SvgPathCandidate, frameSize: FrameSizeMm): boolean {
   return c.closed && c.silhouetteAreaMm2 >= GEOMETRY.minIslandAreaMm2 && !isBackground(c.bounds, frameSize);
 }
 
-/** Ligt (het grootste deel van) `c` binnen de gesloten ring `silhouette`? */
-function liesInside(c: SvgPathCandidate, silhouette: Ring): boolean {
+/** Open lijn die (als middellijn) buitencontour kan zijn als er geen gesloten vorm is. */
+function usableAsCenterlineOuter(c: SvgPathCandidate, frameSize: FrameSizeMm): boolean {
+  return (
+    c.kind === 'line' &&
+    !c.closed &&
+    c.lengthMm >= CENTERLINE.defaultShapeThicknessMm &&
+    !isBackground(c.bounds, frameSize)
+  );
+}
+
+/** Ligt (het grootste deel van) `c` binnen het gebied `inside`? */
+function liesInside(c: SvgPathCandidate, inside: (p: Point2) => boolean): boolean {
   const pts = c.kind === 'region' ? (c.region?.outers ?? []).flat() : c.ring;
   if (pts.length === 0) return false;
   const step = Math.max(1, Math.floor(pts.length / 64));
-  let inside = 0;
+  let n = 0;
   let total = 0;
   for (let i = 0; i < pts.length; i += step) {
     total++;
-    if (pointInRing(pts[i], silhouette)) inside++;
+    if (inside(pts[i])) n++;
   }
-  return inside >= total / 2;
+  return n >= total / 2;
+}
+
+/** Kortste afstand van p tot een open of gesloten polylijn. */
+function distanceToPolyline(p: Point2, line: readonly Point2[], closed: boolean): number {
+  let best = Infinity;
+  const n = line.length;
+  if (n === 1) return Math.hypot(line[0].x - p.x, line[0].y - p.y);
+  for (let i = 0; i < (closed ? n : n - 1); i++) {
+    const a = line[i];
+    const b = line[(i + 1) % n];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy;
+    const t = l2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+    best = Math.min(best, Math.hypot(a.x + t * dx - p.x, a.y + t * dy - p.y));
+  }
+  return best;
+}
+
+/** Afstand van p tot de geometrie van een onderdeel (0 binnen een gevuld gebied). */
+function distanceToCandidate(p: Point2, c: SvgPathCandidate): number {
+  if (c.kind === 'region' && c.region) {
+    if (pointInPaths(p, regionToPaths(c.region))) return 0;
+    return Math.min(...[...c.region.outers, ...c.region.holes].map((r) => distanceToPolyline(p, r, true)));
+  }
+  return distanceToPolyline(p, c.ring, c.closed);
+}
+
+/** Raken twee onderdelen elkaar (tot op `tol` mm)? Eerst een snelle test op de omhullende rechthoeken. */
+function candidatesTouch(a: SvgPathCandidate, b: SvgPathCandidate, tol: number): boolean {
+  const grow = (x: Bounds2) => ({ minX: x.minX - tol, minY: x.minY - tol, maxX: x.maxX + tol, maxY: x.maxY + tol });
+  if (!boundsOverlap(grow(a.bounds), b.bounds)) return false;
+  const pts = a.kind === 'region' ? (a.region?.outers ?? []).flat() : a.ring;
+  const step = Math.max(1, Math.floor(pts.length / 200));
+  for (let i = 0; i < pts.length; i += step) if (distanceToCandidate(pts[i], b) <= tol) return true;
+  // Altijd ook de eindpunten van een open lijn (daar sluiten lijnstukken meestal aan).
+  if (a.kind === 'line' && !a.closed) return [a.ring[0], a.ring[a.ring.length - 1]].some((p) => distanceToCandidate(p, b) <= tol);
+  return false;
+}
+
+/** Ziet een gevuld gebied eruit als een smalle band (lijnvorm)? */
+function isBandLike(c: SvgPathCandidate, frameSize: FrameSizeMm): boolean {
+  if (c.kind !== 'region' || !c.region) return false;
+  return (
+    c.bandWidthMm > 0 &&
+    c.bandWidthMm <= CENTERLINE.bandMaxWidthFraction * Math.min(frameSize.length, frameSize.width) &&
+    elongation(c.region) >= CENTERLINE.bandElongation
+  );
 }
 
 /**
@@ -367,30 +439,107 @@ function liesInside(c: SvgPathCandidate, silhouette: Ring): boolean {
  * silhouet (gaten opgevuld, dus een getekende rand telt als de volle vorm)
  * wordt de buitencontour; onderdelen die daarbinnen liggen worden
  * stempeldetail; achtergrondvormen en onderdelen erbuiten worden genegeerd.
+ * Is er geen bruikbare gesloten vorm, dan wordt de langste open lijn de
+ * buitencontour (als middellijn).
  */
 export function suggestRoles(candidates: SvgPathCandidate[], frameSize: FrameSizeMm): SvgPathCandidate[] {
-  const outer = candidates
+  const marked = candidates.map((c) => ({ ...c, bandLike: isBandLike(c, frameSize) }));
+  const closedOuter = marked
     .filter((c) => usableAsOuter(c, frameSize))
     .reduce<SvgPathCandidate | null>((best, c) => (!best || c.silhouetteAreaMm2 > best.silhouetteAreaMm2 ? c : best), null);
-  const silhouette = outer ? outer.ring : null;
+  const outer =
+    closedOuter ??
+    marked
+      .filter((c) => usableAsCenterlineOuter(c, frameSize))
+      .reduce<SvgPathCandidate | null>((best, c) => (!best || c.lengthMm > best.lengthMm ? c : best), null);
 
-  return candidates.map((c) => {
-    if (outer && c.id === outer.id) return { ...c, suggestedRole: 'outer' };
+  // Een letter of lijntekening bestaat vaak uit meerdere stukken van dezelfde kleur die elkaar
+  // raken (bv. twee rechte lijnen en een boog). Is de buitencontour een middellijn, dan horen
+  // aansluitende lijnen/smalle banden van dezelfde kleur er ook bij.
+  const outers: SvgPathCandidate[] = outer ? [outer] : [];
+  if (outer && suggestInterpretation(outer, 'outer') === 'centerline') {
+    const tol = Math.max(1, outer.bandWidthMm);
+    for (let grown = true; grown; ) {
+      grown = false;
+      for (const c of marked) {
+        if (outers.includes(c) || c.paint !== outer.paint || isBackground(c.bounds, frameSize)) continue;
+        if (!(c.kind === 'line' || c.bandLike) || c.ring.length < 2) continue;
+        // Numerieke restjes (minuscule vlekjes of lijnstukjes) horen nergens bij.
+        if (c.kind === 'region' ? c.areaMm2 < GEOMETRY.minIslandAreaMm2 : c.lengthMm < 1) continue;
+        if (outers.some((o) => candidatesTouch(c, o, tol))) {
+          outers.push(c);
+          grown = true;
+        }
+      }
+    }
+  }
+
+  const insideTests = outers.map((o): ((p: Point2) => boolean) => {
+    if (o.closed) return (p) => pointInRing(p, o.ring);
+    const band = regionToPaths(offsetOpenPolyline(o.ring, CENTERLINE.defaultShapeThicknessMm / 2));
+    return (p) => pointInPaths(p, band);
+  });
+  const inside: ((p: Point2) => boolean) | null = outer ? (p) => insideTests.some((t) => t(p)) : null;
+
+  return marked.map((c) => {
+    if (outers.some((o) => o.id === c.id)) return { ...c, suggestedRole: 'outer' };
     if (isBackground(c.bounds, frameSize)) return { ...c, suggestedRole: 'ignore' };
     if (c.ring.length < 2) return { ...c, suggestedRole: 'ignore' };
     if (c.kind === 'region' && c.areaMm2 < GEOMETRY.minIslandAreaMm2) return { ...c, suggestedRole: 'ignore' };
-    if (silhouette) return { ...c, suggestedRole: liesInside(c, silhouette) ? 'detail' : 'ignore' };
-    // Geen bruikbare gesloten vorm: lijnen kunnen nog detail zijn, de gebruiker moet een buitencontour kiezen.
+    if (inside) return { ...c, suggestedRole: liesInside(c, inside) ? 'detail' : 'ignore' };
+    // Geen bruikbare buitencontour: lijnen kunnen nog detail zijn, de gebruiker moet een buitencontour kiezen.
     return { ...c, suggestedRole: c.kind === 'line' ? 'detail' : 'ignore' };
   });
 }
 
 /**
  * Een selectie is ondubbelzinnig als er precies één bruikbare gesloten
- * vorm is om als buitencontour te gebruiken.
+ * vorm is om als buitencontour te gebruiken (of, zonder gesloten vorm,
+ * precies één open lijn).
  */
 export function isSelectionUnambiguous(candidates: SvgPathCandidate[], frameSize: FrameSizeMm): boolean {
-  return candidates.filter((c) => usableAsOuter(c, frameSize)).length === 1;
+  const closed = candidates.filter((c) => usableAsOuter(c, frameSize)).length;
+  if (closed > 0) return closed === 1;
+  return candidates.filter((c) => usableAsCenterlineOuter(c, frameSize)).length === 1;
+}
+
+/**
+ * Voorgestelde interpretatie voor een onderdeel met een gegeven rol:
+ * - open lijn: altijd middellijn (een open lijn heeft geen binnenkant);
+ * - gesloten lijn: als buitencontour het omsloten gebied, als detail de lijn zelf;
+ * - smalle gevulde band: middellijn, behalve een getekende rand (band met
+ *   binnenruimte) als buitencontour: die wordt de volle vorm;
+ * - andere gevulde vormen: gesloten vorm.
+ */
+export function suggestInterpretation(c: SvgPathCandidate, role: PathRole): PathInterpretation {
+  if (c.kind === 'line') return !c.closed || role !== 'outer' ? 'centerline' : 'shape';
+  if (!c.bandLike) return 'shape';
+  const hasHoles = (c.region?.holes.length ?? 0) > 0;
+  return role === 'outer' && hasHoles ? 'shape' : 'centerline';
+}
+
+/** Kan dit onderdeel als gesloten vorm geïnterpreteerd worden? (Een open lijn niet.) */
+export function canBeShape(c: SvgPathCandidate): boolean {
+  return c.kind === 'region' || c.closed;
+}
+
+export function interpretationOf(
+  c: SvgPathCandidate,
+  roles: Record<string, PathRole>,
+  interpretations: Record<string, PathInterpretation> = {},
+): PathInterpretation {
+  const chosen = interpretations[c.id];
+  if (chosen === 'shape' && !canBeShape(c)) return 'centerline';
+  return chosen ?? suggestInterpretation(c, roleOf(c, roles));
+}
+
+/** Wordt (een deel van) de gekozen buitencontour als middellijn geïnterpreteerd? */
+export function usesCenterlineOuter(
+  candidates: SvgPathCandidate[],
+  roles: Record<string, PathRole>,
+  interpretations: Record<string, PathInterpretation> = {},
+): boolean {
+  return candidates.some((c) => roleOf(c, roles) === 'outer' && interpretationOf(c, roles, interpretations) === 'centerline');
 }
 
 export function defaultRoles(candidates: SvgPathCandidate[]): Record<string, PathRole> {
@@ -426,6 +575,38 @@ export function transferRoles(
   );
 }
 
+/**
+ * Zet de interpretaties om naar een andere granulariteit (zoals
+ * `transferRoles`): elk onderdeel erft de interpretatie die zijn vorm
+ * effectief had (keuze of voorstel). Zo blijft bv. een getekende rand die
+ * als volle vorm gebruikt werd ook in afzonderlijke stukken een volle vorm,
+ * ook al ziet elk stuk er afzonderlijk uit als een smalle band.
+ */
+export function transferInterpretations(
+  from: SvgPathCandidate[],
+  roles: Record<string, PathRole>,
+  interpretations: Record<string, PathInterpretation>,
+  to: SvgPathCandidate[],
+): Record<string, PathInterpretation> {
+  const byMember = new Map<string, { interp: PathInterpretation; weight: number }>();
+  for (const c of from) {
+    if (roleOf(c, roles) === 'ignore' && !interpretations[c.id]) continue;
+    const interp = interpretationOf(c, roles, interpretations);
+    const weight = c.kind === 'region' ? c.areaMm2 / Math.max(1, c.memberIds.length) : c.lengthMm;
+    for (const m of c.memberIds) byMember.set(m, { interp, weight });
+  }
+  const out: Record<string, PathInterpretation> = {};
+  for (const c of to) {
+    let best: { interp: PathInterpretation; weight: number } | undefined;
+    for (const m of c.memberIds) {
+      const hit = byMember.get(m);
+      if (hit && (!best || hit.weight > best.weight)) best = hit;
+    }
+    if (best) out[c.id] = best.interp;
+  }
+  return out;
+}
+
 function roleOf(c: SvgPathCandidate, roles: Record<string, PathRole>): PathRole {
   return roles[c.id] ?? c.suggestedRole;
 }
@@ -434,19 +615,37 @@ function roleOf(c: SvgPathCandidate, roles: Record<string, PathRole>): PathRole 
 /* Stap C: validatie van de gekozen buitencontour + details             */
 /* ------------------------------------------------------------------ */
 
-/** De onderdelen met rol "buitencontour"; weigert als er geen is of als er een open lijn bij zit. */
+/**
+ * De onderdelen met rol "buitencontour"; weigert als er geen is. Een open
+ * lijn is hier geen fout meer: die wordt altijd als middellijn gebruikt.
+ */
 export function selectedOuters(candidates: SvgPathCandidate[], roles: Record<string, PathRole>): SvgPathCandidate[] {
   const outers = candidates.filter((c) => roleOf(c, roles) === 'outer');
   if (outers.length === 0) {
     fail('NO_OUTER_SELECTED', 'Kies een vorm als buitencontour (klik erop tot hij blauw is).');
   }
-  if (outers.some((c) => !c.closed)) {
-    fail(
-      'SVG_OPEN_CONTOUR',
-      'Een open lijn kan geen buitencontour zijn. Kies een gesloten vorm of een gesloten lijn als buitencontour.',
-    );
-  }
   return outers;
+}
+
+/** Cache: middellijnen van gevulde onderdelen (een onderdeel verandert nooit na het inlezen). */
+const centerlineCache = new WeakMap<SvgPathCandidate, CenterlinePath[]>();
+
+/** Middellijn(en) van een onderdeel in mm (nog niet gecentreerd). Een lijn is zijn eigen middellijn. */
+export function centerlineOf(c: SvgPathCandidate): CenterlinePath[] {
+  if (c.kind === 'line') return [{ points: c.ring, closed: c.closed }];
+  let paths = centerlineCache.get(c);
+  if (!paths) {
+    paths = extractCenterline(c.region ?? { outers: [c.ring], holes: [] }).paths;
+    centerlineCache.set(c, paths);
+  }
+  return paths;
+}
+
+export interface SelectionOptions {
+  /** Expliciete interpretatiekeuzes (candidate.id -> interpretatie); anders het voorstel. */
+  interpretations?: Record<string, PathInterpretation>;
+  /** Vormdikte (mm) voor een buitencontour die als middellijn geïnterpreteerd wordt. */
+  shapeThicknessMm?: number;
 }
 
 /**
@@ -456,8 +655,29 @@ export function selectedOuters(candidates: SvgPathCandidate[], roles: Record<str
  * volledige vorm op, en de binnenrand wordt geen ongewenste uitsparing.
  * Het resultaat moet één samenhangende vorm zijn.
  */
-export function buildSilhouette(outers: SvgPathCandidate[], notices: Set<string>): Ring {
-  const rings = outers.flatMap((c) => (c.kind === 'region' ? (c.region?.outers ?? []) : [c.ring]));
+export function buildSilhouette(
+  outers: SvgPathCandidate[],
+  notices: Set<string>,
+  roles: Record<string, PathRole> = Object.fromEntries(outers.map((c) => [c.id, 'outer' as const])),
+  options: SelectionOptions = {},
+): Ring {
+  const thickness = options.shapeThicknessMm ?? CENTERLINE.defaultShapeThicknessMm;
+  const isCenterline = (c: SvgPathCandidate) => interpretationOf(c, roles, options.interpretations) === 'centerline';
+  const rings: Ring[] = [];
+  let centerlineLoops = false;
+  for (const c of outers) {
+    if (isCenterline(c)) {
+      // Middellijn: eerst een gesloten band met de vormdikte, die is daarna de buitenvorm.
+      const band = bandAroundCenterline(centerlineOf(c), thickness);
+      rings.push(...band.outers);
+      if (band.holes.some((h) => signedArea(h) >= GEOMETRY.minIslandAreaMm2)) centerlineLoops = true;
+    } else {
+      rings.push(...(c.kind === 'region' ? (c.region?.outers ?? []) : [c.ring]));
+    }
+  }
+  if (centerlineLoops) {
+    notices.add('Waar de middellijn een lus vormt of zichzelf kruist, wordt de binnenruimte van de vorm opgevuld.');
+  }
   const islands = splitIslands(unionPaths(rings));
   // Eilanden die in de binnenruimte van een ander eiland liggen, vallen binnen het opgevulde silhouet.
   const topLevel = islands.filter(
@@ -474,8 +694,8 @@ export function buildSilhouette(outers: SvgPathCandidate[], notices: Set<string>
   }
   const filledInside =
     significant[0].holes.some((h) => signedArea(h) >= GEOMETRY.minIslandAreaMm2) ||
-    outers.some((c) => (c.region?.holes ?? []).some((h) => signedArea(h) >= GEOMETRY.minIslandAreaMm2));
-  if (filledInside) {
+    outers.some((c) => !isCenterline(c) && (c.region?.holes ?? []).some((h) => signedArea(h) >= GEOMETRY.minIslandAreaMm2));
+  if (filledInside && !centerlineLoops) {
     notices.add('De binnenkant van de buitencontour wordt volledig opgevuld: een getekende rand wordt een volle vorm.');
   }
   return significant[0].outer;
@@ -484,26 +704,37 @@ export function buildSilhouette(outers: SvgPathCandidate[], notices: Set<string>
 /**
  * Bouwt de stempeldetails (rol "detail") uitgelijnd met de gekozen
  * buitencontour: dezelfde kadertransformatie, dezelfde `centerOffset`.
- * Gevulde onderdelen blijven gevulde gebieden (niet opnieuw verbreed);
- * lijnen blijven lijnen (worden met de detailbreedte verbreed).
+ * - Middellijn: lijnen blijven lijnen; van gevulde banden wordt eerst de
+ *   middellijn bepaald. Beide worden later met de detailbreedte verbreed.
+ * - Gesloten vorm: gevulde onderdelen blijven gevulde gebieden op hun
+ *   getekende breedte (niet opnieuw verbreed); een gesloten lijn wordt het
+ *   omsloten gebied.
  */
 export function alignDetails(
   candidates: SvgPathCandidate[],
   roles: Record<string, PathRole>,
   centerOffset: Point2,
+  interpretations: Record<string, PathInterpretation> = {},
 ): DetailLine[] {
   const shift = (r: readonly Point2[]) => r.map((p) => ({ x: p.x - centerOffset.x, y: p.y - centerOffset.y }));
   return candidates
     .filter((c) => roleOf(c, roles) === 'detail' && c.ring.length >= 2)
-    .map((c): DetailLine =>
-      c.kind === 'region' && c.region
-        ? {
+    .flatMap((c): DetailLine[] => {
+      if (interpretationOf(c, roles, interpretations) === 'centerline') {
+        return centerlineOf(c).map((p) => ({ closed: p.closed, ring: shift(p.points) }));
+      }
+      if (c.kind === 'region' && c.region) {
+        return [
+          {
             closed: true,
             ring: shift(c.ring),
             region: { outers: c.region.outers.map(shift), holes: c.region.holes.map(shift) },
-          }
-        : { closed: c.closed, ring: shift(c.ring) },
-    );
+          },
+        ];
+      }
+      const ring = ensureCCW(shift(c.ring)); // gesloten lijn als gesloten vorm
+      return [{ closed: true, ring, region: { outers: [ring], holes: [] } }];
+    });
 }
 
 export interface ContourSelection {
@@ -521,12 +752,26 @@ export function buildSelectionOrThrow(
   roles: Record<string, PathRole>,
   frameSize: FrameSizeMm,
   extraNotices: string[] = [],
+  options: SelectionOptions = {},
 ): ContourSelection {
   const notices = new Set(extraNotices);
-  const silhouette = buildSilhouette(selectedOuters(candidates, roles), notices);
+  const interpretations = options.interpretations ?? {};
+  const outers = selectedOuters(candidates, roles);
+  const centerline = usesCenterlineOuter(outers, roles, interpretations);
+  const thickness = options.shapeThicknessMm ?? CENTERLINE.defaultShapeThicknessMm;
+  if (!(thickness > 0)) fail('INVALID_PARAMETERS', 'De vormdikte moet groter dan 0 mm zijn.');
+  const silhouette = buildSilhouette(outers, notices, roles, { interpretations, shapeThicknessMm: thickness });
+  if (centerline) {
+    notices.add(`De buitencontour wordt opgebouwd rond de middellijn, met een vormdikte van ${fmtMm(thickness)} mm.`);
+  }
   const contour = finalizeOuterRing(silhouette, frameSize, [...notices]);
-  const details = alignDetails(candidates, roles, contour.centerOffset);
+  if (centerline) contour.centerline = { thicknessMm: thickness };
+  const details = alignDetails(candidates, roles, contour.centerOffset, interpretations);
   return { contour, details };
+}
+
+function fmtMm(n: number): string {
+  return String(Math.round(n * 10) / 10).replace('.', ',');
 }
 
 export function buildSelection(
@@ -534,8 +779,9 @@ export function buildSelection(
   roles: Record<string, PathRole>,
   frameSize: FrameSizeMm,
   extraNotices: string[] = [],
+  options: SelectionOptions = {},
 ): Result<ContourSelection> {
-  return toResult(() => buildSelectionOrThrow(candidates, roles, frameSize, extraNotices));
+  return toResult(() => buildSelectionOrThrow(candidates, roles, frameSize, extraNotices, options));
 }
 
 /**

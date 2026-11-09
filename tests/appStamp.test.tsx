@@ -115,7 +115,10 @@ describe('App: Stempel en Cutter & Stempel', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     const selects = screen.getAllByRole('combobox', { name: /Rol van/ });
     expect(selects.map((s) => (s as HTMLSelectElement).value)).toEqual(['outer', 'detail']);
-    expect(screen.getByRole('combobox', { name: /Getekende rand/ })).toHaveValue('outer');
+    expect(screen.getByRole('combobox', { name: /Rol van .*Getekende rand/ })).toHaveValue('outer');
+    // De rand blijft een gesloten (volle) vorm; de smalle nerven worden standaard middellijnen.
+    const interps = screen.getAllByRole('combobox', { name: /Interpretatie van/ });
+    expect(interps.map((s) => (s as HTMLSelectElement).value)).toEqual(['shape', 'centerline']);
     expect(screen.getByText(/volledig opgevuld/)).toBeInTheDocument();
     expect(screen.getByText(/vorm ≈ 71 × 81 mm/)).toBeInTheDocument();
 

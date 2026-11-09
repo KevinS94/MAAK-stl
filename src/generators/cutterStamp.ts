@@ -8,17 +8,19 @@ import { toResult } from '../engine/errors';
 import { signedArea } from '../engine/geometry2d';
 import type { DetailLine, ShapeParameters, ValidatedContour } from '../engine/types';
 import { buildCookieCutter } from './cookieCutter';
-import { assertParameters, innerContours } from './shared';
+import { assertParameters, innerContours, withHandleHint } from './shared';
 import { buildStamp } from './stampGeometry';
 import type { ComboGenerator, ComboResult } from './types';
 
 export function buildCutterAndStamp(contour: ValidatedContour, details: DetailLine[], params: ShapeParameters): ComboResult {
   assertParameters(params, CUTTER_STAMP_PARAMS);
   const cutter = buildCookieCutter(contour, params);
-  const inners = innerContours(contour.outer, params.wallThickness);
+  const inners = innerContours(contour.outer, params.wallThickness, contour.centerline?.thicknessMm);
   // Bij een gesplitste binnenruimte (smalle hals) wordt de grootste holte gebruikt.
   const cutterInner = inners.reduce((best, r) => (Math.abs(signedArea(r)) > Math.abs(signedArea(best)) ? r : best));
-  const { mesh: stamp } = buildStamp(cutterInner, details, params, true);
+  const { mesh: stamp } = withHandleHint(contour, params, 2 * (params.wallThickness + (params.insetOffset ?? 0)), () =>
+    buildStamp(cutterInner, details, params, true),
+  );
   return { cutter, stamp };
 }
 

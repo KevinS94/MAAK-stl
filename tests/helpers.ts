@@ -1,7 +1,7 @@
 import { buildContourOrThrow } from '../src/engine/contourProcessing';
 import { parseSvgOrThrow, parseSvgSceneOrThrow } from '../src/engine/svgParser';
 import { buildSelectionOrThrow, defaultRoles, extractPathCandidates, type ContourSelection, type Granularity } from '../src/engine/svgPaths';
-import type { FrameSizeMm, MeshData, PathRole, SvgPathCandidate, ValidatedContour } from '../src/engine/types';
+import type { FrameSizeMm, MeshData, PathInterpretation, PathRole, SvgPathCandidate, ValidatedContour } from '../src/engine/types';
 
 export const BASIC: FrameSizeMm = { length: 100, width: 100 };
 
@@ -24,11 +24,28 @@ export function selectionOf(
   frame: FrameSizeMm = BASIC,
   roleOf?: (candidate: SvgPathCandidate) => PathRole,
   granularity: Granularity = 'shapes',
+  options: SelectionTestOptions = {},
 ): ContourSelection {
   const candidates = candidatesOf(svg, frame, granularity);
   const roles = roleOf ? Object.fromEntries(candidates.map((c) => [c.id, roleOf(c)])) : defaultRoles(candidates);
-  return buildSelectionOrThrow(candidates, roles, frame);
+  const interpretations: Record<string, PathInterpretation> = {};
+  if (options.interpretation) {
+    for (const c of candidates) {
+      const i = options.interpretation(c);
+      if (i) interpretations[c.id] = i;
+    }
+  }
+  return buildSelectionOrThrow(candidates, roles, frame, [], { interpretations, shapeThicknessMm: options.shapeThicknessMm });
 }
+
+export interface SelectionTestOptions {
+  /** Expliciete interpretatie per onderdeel (undefined = voorstel). */
+  interpretation?: (candidate: SvgPathCandidate) => PathInterpretation | undefined;
+  shapeThicknessMm?: number;
+}
+
+/** Interpreteer alle gevulde onderdelen als gesloten vorm (het gedrag van vóór de middellijnen). */
+export const ALL_SHAPES: SelectionTestOptions = { interpretation: (c) => (c.kind === 'region' ? 'shape' : undefined) };
 
 /** Leest een binary STL in en levert een geïndexeerde mesh op exacte float32-posities. */
 export function parseBinaryStl(buffer: ArrayBuffer): { mesh: MeshData; triangleCount: number; normals: Float32Array } {

@@ -13,6 +13,7 @@ import {
   inflatePathsD,
   JoinType,
   PolyTreeD,
+  simplifyPathD,
   type PathsD,
   type PolyPathD,
 } from 'clipper2-ts';
@@ -28,6 +29,20 @@ export interface RegionRings {
 }
 
 const PRECISION = GEOMETRY.clipperPrecision;
+/** Punten die minder dan één rasterstap van Clipper (0,1 µm) van de rechte lijn afwijken, zijn overbodig. */
+const COLLINEAR_EPS = 10 ** -PRECISION;
+
+/**
+ * Schoont een ring op: bijna-dubbele punten en (op Clipper-precisie)
+ * collineaire punten vervallen. Geneste offsets leveren veel zulke punten
+ * op; ze veranderen de vorm niet, maar kunnen de triangulatie laten falen.
+ */
+function cleanRing(points: readonly { x: number; y: number }[]): Ring {
+  const r = removeNearDuplicates(points.map((q) => ({ x: q.x, y: q.y })), GEOMETRY.minPointDistanceMm);
+  if (r.length <= 3) return r;
+  const s = simplifyPathD(r, COLLINEAR_EPS, true).map((q) => ({ x: q.x, y: q.y }));
+  return s.length >= 3 ? s : r;
+}
 
 function toPaths(rings: readonly (readonly Point2[])[]): PathsD {
   return rings.map((r) => r.map((p) => ({ x: p.x, y: p.y })));
@@ -40,7 +55,7 @@ function toPaths(rings: readonly (readonly Point2[])[]): PathsD {
  */
 export function classifyPaths(paths: PathsD): RegionRings {
   const cleaned = paths
-    .map((p) => removeNearDuplicates(p.map((q) => ({ x: q.x, y: q.y })), GEOMETRY.minPointDistanceMm))
+    .map((p) => cleanRing(p))
     .filter((p) => p.length >= 3)
     .map((p) => ({ ring: p, area: signedArea(p) }))
     .filter((p) => Math.abs(p.area) > 1e-8);
@@ -182,7 +197,7 @@ export function splitIslands(paths: PathsD, fillRule: FillRule = FillRule.NonZer
   const islands: Island[] = [];
   const clean = (p: readonly { x: number; y: number }[] | null): Ring | null => {
     if (!p) return null;
-    const r = removeNearDuplicates(p.map((q) => ({ x: q.x, y: q.y })), GEOMETRY.minPointDistanceMm);
+    const r = cleanRing(p);
     return r.length >= 3 && Math.abs(signedArea(r)) > 1e-8 ? ensureCCW(r) : null;
   };
   const visitOuter = (node: PolyPathD) => {

@@ -13,13 +13,13 @@ import { buildCutterAndStamp } from '../src/generators/cutterStamp';
 import { buildStandaloneStamp } from '../src/generators/stamp';
 import { buildPlateOuter, buildReliefLevels, buildStamp } from '../src/generators/stampGeometry';
 import { canvaLeafSvg, SVG } from './fixtures';
-import { parseBinaryStl, selectionOf } from './helpers';
+import { ALL_SHAPES, BASIC, parseBinaryStl, selectionOf } from './helpers';
 import { coveredAt, expectValidSolid } from './meshChecks';
 
 const P = STAMP_DEFAULTS;
 const PLATE_TOP = P.handleHeight + STAMP_INTERNAL.plateThicknessMm;
 /** Cirkel r = 40 mm met twee gevulde detailbanden van 40 × 2 mm rond y = ±10 mm (los van de contour). */
-const sel = selectionOf(SVG.circleWithFilledBands);
+const sel = selectionOf(SVG.circleWithFilledBands, BASIC, undefined, 'shapes', ALL_SHAPES);
 /** Punt op de middellijn van de verhoogde contour (r = 40 − halve contourbreedte − inset). */
 const ON_CONTOUR = { x: 40 - (P.contourWidth / 2 + STAMP_INTERNAL.raisedContourInsetMm), y: 0 };
 const ON_DETAIL = { x: 0, y: 10 };
@@ -106,6 +106,10 @@ describe('hoogte contour > 0 en verschillende detailhoogtes', () => {
     const crossing = selectionOf(
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="#2e7d32"/>' +
         '<rect x="12" y="49" width="76" height="2" fill="#0b2e0b"/></svg>',
+      BASIC,
+      undefined,
+      'shapes',
+      ALL_SHAPES,
     );
     expect(crossing.details).toHaveLength(1);
     for (const [contourHeight, detailHeight] of [

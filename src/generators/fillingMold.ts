@@ -34,7 +34,7 @@ export function buildFillingMold(
     );
   }
   const outer = contour.outer;
-  const inners = innerContours(outer, params.wallThickness);
+  const inners = innerContours(outer, params.wallThickness, contour.centerline?.thicknessMm);
 
   const mb = new MeshBuilder();
   const outerBottom = mb.ringLevel(outer, 0);
