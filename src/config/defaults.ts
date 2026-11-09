@@ -72,8 +72,9 @@ export const STAMP_PARAMS: ParamSpec[] = [
   { key: 'length', label: 'Lengte', hint: 'Breedte van het volledige SVG-kader (X)', min: 20, max: 300, step: 1, default: BASIC_FRAME_MM.length },
   { key: 'width', label: 'Breedte', hint: 'Hoogte van het volledige SVG-kader (Y)', min: 20, max: 300, step: 1, default: BASIC_FRAME_MM.width },
   { key: 'detailWidth', label: 'Dikte details', hint: 'Breedte van de verhoogde detaillijnen', min: 0.4, max: 3, step: 0.1, default: 1.0 },
-  { key: 'contourWidth', label: 'Dikte contour', hint: 'Breedte van de verhoogde contourlijn', min: 0.4, max: 4, step: 0.1, default: 1.2 },
-  { key: 'reliefHeight', label: 'Hoogte reliëf', hint: 'Hoogte van contour en details boven het stempeloppervlak', min: 0.4, max: 4, step: 0.1, default: 1.5 },
+  { key: 'contourWidth', label: 'Dikte contour', hint: 'Breedte van de verhoogde contourlijn', min: 0.4, max: 4, step: 0.1, default: 1.2, disabledWhen: { key: 'contourHeight', equals: 0 } },
+  { key: 'contourHeight', label: 'Hoogte contour', hint: 'Hoogte van de verhoogde contourlijn; 0 = geen contourlijn', min: 0, max: 4, step: 0.1, default: 1.5 },
+  { key: 'detailHeight', label: 'Hoogte details', hint: 'Hoogte van de verhoogde details', min: 0.4, max: 4, step: 0.1, default: 1.5 },
   { key: 'handleDiameter', label: 'Diameter handvat', hint: 'Doorsnede van het cilindrische handvat', min: 8, max: 60, step: 1, default: 20 },
   { key: 'handleHeight', label: 'Hoogte handvat', hint: 'Hoogte van het handvat', min: 4, max: 40, step: 1, default: 12 },
   { key: 'insetOffset', label: 'Offset naar binnen', hint: 'Extra speling van de stempelplaat naar binnen', min: 0, max: 3, step: 0.1, default: 0 },
@@ -96,6 +97,13 @@ export const STAMP_INTERNAL = {
   minReliefAreaMm2: 0.3,
   /** Als bijsnijden meer dan deze fractie van het reliëfoppervlak wegneemt, volgt een waarschuwing. */
   reliefClipWarnFraction: 0.1,
+  /**
+   * Waar contour en details met een verschillende hoogte samenkomen, ligt het
+   * hogere reliëf minstens zoveel (mm) binnen de rand van het lagere. Zo
+   * vallen er nooit wanden van twee niveaus samen (geen gedegenereerde
+   * driehoeken); het randje ligt ver onder de printresolutie.
+   */
+  reliefStepInsetMm: 0.05,
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -108,8 +116,9 @@ export const CUTTER_STAMP_PARAMS: ParamSpec[] = [
   { key: 'height', label: 'Hoogte', hint: 'Totale hoogte van de cutter', min: 6, max: 60, step: 0.5, default: 15, group: 'Cookie cutter' },
   { key: 'wallThickness', label: 'Wanddikte', hint: 'Dikte van de snijwand', min: 0.4, max: 5, step: 0.1, default: 1.2, group: 'Cookie cutter' },
   { key: 'detailWidth', label: 'Dikte details', hint: 'Breedte van de verhoogde detaillijnen', min: 0.4, max: 3, step: 0.1, default: 1.0, group: 'Stempel' },
-  { key: 'contourWidth', label: 'Dikte contour', hint: 'Breedte van de verhoogde contourlijn', min: 0.4, max: 4, step: 0.1, default: 1.2, group: 'Stempel' },
-  { key: 'reliefHeight', label: 'Hoogte reliëf', hint: 'Hoogte van contour en details boven het stempeloppervlak', min: 0.4, max: 4, step: 0.1, default: 1.5, group: 'Stempel' },
+  { key: 'contourWidth', label: 'Dikte contour', hint: 'Breedte van de verhoogde contourlijn', min: 0.4, max: 4, step: 0.1, default: 1.2, group: 'Stempel', disabledWhen: { key: 'contourHeight', equals: 0 } },
+  { key: 'contourHeight', label: 'Hoogte contour', hint: 'Hoogte van de verhoogde contourlijn; 0 = geen contourlijn', min: 0, max: 4, step: 0.1, default: 1.5, group: 'Stempel' },
+  { key: 'detailHeight', label: 'Hoogte details', hint: 'Hoogte van de verhoogde details', min: 0.4, max: 4, step: 0.1, default: 1.5, group: 'Stempel' },
   { key: 'handleDiameter', label: 'Diameter handvat', hint: 'Doorsnede van het cilindrische handvat', min: 8, max: 60, step: 1, default: 20, group: 'Stempel' },
   { key: 'handleHeight', label: 'Hoogte handvat', hint: 'Hoogte van het handvat', min: 4, max: 40, step: 1, default: 12, group: 'Stempel' },
   { key: 'insetOffset', label: 'Extra speling naar binnen', hint: 'Extra speling van de stempel t.o.v. de binnenzijde van de cutter', min: 0, max: 3, step: 0.1, default: 0.4, group: 'Stempel' },

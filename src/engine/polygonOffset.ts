@@ -232,3 +232,17 @@ export function clipOpenPolyline(points: readonly Point2[], clip: PathsD): Point
 export function islandsToPaths(islands: readonly Island[]): PathsD {
   return regionToPaths({ outers: islands.map((i) => i.outer), holes: islands.flatMap((i) => i.holes) });
 }
+
+/** Offset van een volledige regio (buitencontouren én gaten); negatief = krimpen. */
+export function offsetRegion(region: RegionRings, delta: number): RegionRings {
+  const paths = regionToPaths(region);
+  if (paths.length === 0) return { outers: [], holes: [] };
+  return classifyPaths(
+    inflatePathsD(paths, delta, JoinType.Round, EndType.Polygon, 2, PRECISION, GEOMETRY.arcToleranceMm),
+  );
+}
+
+/** Doorsnede van twee regio's. */
+export function intersectRegions(a: RegionRings, b: RegionRings): RegionRings {
+  return classifyPaths(intersectPaths(regionToPaths(a), regionToPaths(b)));
+}

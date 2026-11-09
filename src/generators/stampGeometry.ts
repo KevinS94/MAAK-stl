@@ -20,9 +20,13 @@
 import { STAMP_INTERNAL } from '../config/defaults';
 import { fail } from '../engine/errors';
 import { ensureCCW, pointInRing, ringBounds, ringStrictlyInside, signedArea, SegmentGrid } from '../engine/geometry2d';
-import { MeshBuilder } from '../engine/meshGeneration';
+import { MeshBuilder, type RingLevel } from '../engine/meshGeneration';
 import {
+  intersectRegions,
   intersectRegionWithRing,
+  offsetRegion,
+  regionToPaths,
+  splitIslands,
   offsetClosedPolyline,
   offsetOpenPolyline,
   offsetRing,
@@ -93,76 +97,115 @@ export function buildDetailRegion(details: DetailLine[], detailWidth: number): R
   return unionRegions(regions);
 }
 
+/** Eén reliëfniveau: het gebied dat tot `heightMm` boven het plaatoppervlak reikt. */
+export interface ReliefLevel {
+  region: RegionRings;
+  heightMm: number;
+}
+
+/**
+ * Eén samenhangend reliëfeiland op de plaat. Het staat volledig op
+ * `heightMm`, of — waar contour en details met een verschillende hoogte
+ * samenkomen — op de laagste hoogte met daarop een hoger `terrace`, dat
+ * minstens `reliefStepInsetMm` binnen de rand van het eiland blijft.
+ */
+export interface ReliefIsland {
+  outer: Ring;
+  holes: Ring[];
+  heightMm: number;
+  terrace?: ReliefLevel;
+}
+
 export interface ReliefResult {
+  islands: ReliefIsland[];
+  /** Volledige voetafdruk van het reliëf (alle eilanden samen). */
   region: RegionRings;
   notices: string[];
 }
 
+function dropSpecks(region: RegionRings): RegionRings {
+  return {
+    outers: region.outers.filter((r) => Math.abs(signedArea(r)) >= STAMP_INTERNAL.minReliefAreaMm2),
+    holes: region.holes.filter((r) => Math.abs(signedArea(r)) >= STAMP_INTERNAL.minReliefAreaMm2 * 0.3),
+  };
+}
+
+const isEmpty = (r: RegionRings) => r.outers.length === 0;
+
 /**
- * Verenigt contourlijn en details, en snijdt het resultaat bij tot een
+ * Bouwt het reliëf: verhoogde contourlijn (hoogte `contourHeight`; 0 = geen
+ * contourlijn) en details (hoogte `detailHeight`), elk bijgesneden tot een
  * veilige binnenmarge t.o.v. de plaatrand (spec §4.3).
+ *
+ * Het geheel wordt opgesplitst in eilanden. Een eiland dat enkel uit
+ * contour of enkel uit details bestaat, staat exact op die hoogte. Raken
+ * contour en details elkaar met een verschillende hoogte, dan staat dat
+ * eiland op de laagste hoogte en krijgt het hogere deel een terras erop.
  */
-export function buildReliefRegion(
+export function buildReliefLevels(
   plateOuter: Ring,
   details: DetailLine[],
   params: ShapeParameters,
   includeContour: boolean,
 ): ReliefResult {
   const notices: string[] = [];
-  const regions: RegionRings[] = [];
-  if (includeContour) regions.push(buildRaisedContourRegion(plateOuter, params.contourWidth));
-  if (details.length > 0) regions.push(buildDetailRegion(details, params.detailWidth));
-  if (regions.length === 0) return { region: { outers: [], holes: [] }, notices };
-
-  const merged = unionRegions(regions);
-  const before = regionArea(merged);
+  const contourHeight = includeContour ? params.contourHeight : 0;
+  const detailHeight = params.detailHeight;
 
   const safe = offsetRing(plateOuter, -STAMP_INTERNAL.reliefSafetyMarginMm);
   if (safe.outers.length !== 1) {
     fail('CONTOUR_RELIEF_INVALID', 'Er blijft geen veilige binnenmarge over voor reliëf op deze vorm.');
   }
-  const clipped = intersectRegionWithRing(merged, safe.outers[0]);
-  const after = regionArea(clipped);
-  if (before > 1e-6 && after < before * (1 - STAMP_INTERNAL.reliefClipWarnFraction)) {
+  let clippedAway = false;
+  const clip = (region: RegionRings): RegionRings => {
+    const before = regionArea(region);
+    const clipped = intersectRegionWithRing(region, safe.outers[0]);
+    if (before > 1e-6 && regionArea(clipped) < before * (1 - STAMP_INTERNAL.reliefClipWarnFraction)) clippedAway = true;
+    return dropSpecks(clipped);
+  };
+
+  const parts: ReliefLevel[] = [];
+  if (contourHeight > 0) {
+    parts.push({ region: clip(buildRaisedContourRegion(plateOuter, params.contourWidth)), heightMm: contourHeight });
+  }
+  if (details.length > 0 && detailHeight > 0) {
+    parts.push({ region: clip(buildDetailRegion(details, params.detailWidth)), heightMm: detailHeight });
+  }
+  if (clippedAway) {
     notices.push('Een deel van de contourlijn of details viel buiten de veilige rand van de plaat en is afgesneden.');
   }
 
-  const outers = clipped.outers.filter((r) => Math.abs(signedArea(r)) >= STAMP_INTERNAL.minReliefAreaMm2);
-  const holes = clipped.holes.filter((r) => Math.abs(signedArea(r)) >= STAMP_INTERNAL.minReliefAreaMm2 * 0.3);
-  return { region: { outers, holes }, notices };
+  const present = parts.filter((p) => !isEmpty(p.region));
+  const footprint = dropSpecks(unionRegions(present.map((p) => p.region)));
+  const islands: ReliefIsland[] = [];
+  const minOverlap = STAMP_INTERNAL.minReliefAreaMm2 * 0.1;
+  for (const isl of splitIslands(regionToPaths(footprint))) {
+    const islandRegion: RegionRings = { outers: [isl.outer], holes: isl.holes };
+    const touching = present
+      .filter((p) => regionArea(intersectRegions(islandRegion, p.region)) > minOverlap)
+      .sort((a, b) => a.heightMm - b.heightMm);
+    if (touching.length === 0) continue;
+    const low = touching[0];
+    const high = touching[touching.length - 1];
+    const island: ReliefIsland = { outer: isl.outer, holes: isl.holes, heightMm: low.heightMm };
+    if (high.heightMm - low.heightMm > 1e-9) {
+      const inner = offsetRegion(islandRegion, -STAMP_INTERNAL.reliefStepInsetMm);
+      const top = dropSpecks(intersectRegions(high.region, inner));
+      if (!isEmpty(top)) island.terrace = { region: top, heightMm: high.heightMm };
+    }
+    islands.push(island);
+  }
+  return { islands, region: footprint, notices };
 }
 
-/**
- * Nesting van de reliëfvormen ("bosses"): elk gat hoort bij de kleinste
- * boss die het omsluit, en elke boss ligt ofwel rechtstreeks op de plaat
- * (`parentHole = -1`) ofwel in het gat van een andere boss (bv. nerven
- * binnen de verhoogde contourring).
- */
-interface BossNesting {
-  /** Per boss: indices van zijn eigen gaten. */
-  holesOf: number[][];
-  /** Per boss: index van het gat waarin hij ligt, of -1. */
-  parentHole: number[];
-}
-
-function nestBosses(outers: Ring[], holes: Ring[]): BossNesting {
-  const area = (r: Ring) => Math.abs(signedArea(r));
-  const holesOf: number[][] = outers.map(() => []);
-  holes.forEach((h, hi) => {
-    let best = -1;
-    outers.forEach((o, oi) => {
-      if (area(o) > area(h) && pointInRing(h[0], o) && (best < 0 || area(o) < area(outers[best]))) best = oi;
-    });
-    if (best >= 0) holesOf[best].push(hi);
-  });
-  const parentHole = outers.map((o) => {
-    let best = -1;
-    holes.forEach((h, hi) => {
-      if (area(h) > area(o) && pointInRing(o[0], h) && (best < 0 || area(h) < area(holes[best]))) best = hi;
-    });
-    return best;
-  });
-  return { holesOf, parentHole };
+/** Voetafdruk van het volledige reliëf (alle niveaus samen); zie `buildReliefLevels`. */
+export function buildReliefRegion(
+  plateOuter: Ring,
+  details: DetailLine[],
+  params: ShapeParameters,
+  includeContour: boolean,
+): ReliefResult {
+  return buildReliefLevels(plateOuter, details, params, includeContour);
 }
 
 /* ------------------------------------------------------------------ */
@@ -221,18 +264,42 @@ export function placeHandle(plateOuter: Ring, diameterMm: number): Ring {
 /* Mesh-opbouw                                                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Vlak op één hoogte tussen twee niveaus: het gebied `lower − upper`.
+ * Randen: buitencontouren van `lower` en gaten van `upper` begrenzen het
+ * vlak van buiten; gaten van `lower` en buitencontouren van `upper` zijn er
+ * gaten in. Elk gat hoort bij de kleinste omsluitende buitenrand.
+ */
+function capBetween(mb: MeshBuilder, outersAt: RingLevel[], holesAt: RingLevel[]): void {
+  const area = (r: RingLevel) => Math.abs(signedArea(r.ring));
+  const assigned: RingLevel[][] = outersAt.map(() => []);
+  for (const h of holesAt) {
+    let best = -1;
+    outersAt.forEach((o, oi) => {
+      if (area(o) > area(h) && pointInRing(h.ring[0], o.ring) && (best < 0 || area(o) < area(outersAt[best]))) best = oi;
+    });
+    if (best < 0) fail('CONTOUR_RELIEF_INVALID', 'Het reliëf van de stempel kon niet betrouwbaar opgebouwd worden.');
+    assigned[best].push(h);
+  }
+  outersAt.forEach((o, oi) => mb.cap(o, assigned[oi], 'up', FaceTag.Cap));
+}
+
+/**
+ * Bouwt de stempelmesh: handvat, plaat en reliëfeilanden. Elk eiland krijgt
+ * verticale wanden van het plaatoppervlak tot zijn hoogte; een terras
+ * daarop krijgt wanden van de eilandhoogte tot zijn eigen hoogte. Er
+ * bestaan geen niveaus zonder hoogte (geen nulhoogte-extrusies).
+ */
 export function buildStampMesh(
   plateOuter: Ring,
-  reliefRegion: RegionRings,
+  islands: ReliefIsland[],
   handleRing: Ring,
   plateThicknessMm: number,
-  reliefHeightMm: number,
   handleHeightMm: number,
 ): MeshData {
   const mb = new MeshBuilder();
   const baseZ = handleHeightMm;
   const topZ = baseZ + plateThicknessMm;
-  const reliefTopZ = topZ + reliefHeightMm;
 
   // Handvat: cilinder van Z = 0 (vlakke onderkant) tot Z = baseZ (vergroeid met de plaat).
   const handleBottom = mb.ringLevel(handleRing, 0);
@@ -249,31 +316,37 @@ export function buildStampMesh(
   const plateTop = mb.ringLevel(plateOuter, topZ);
   mb.wall(plateBottom, plateTop, 'out', FaceTag.Outer);
 
-  // Bovenkant van de plaat: volledig vlak, met een gat per reliëfvorm (boss) die rechtstreeks op de plaat staat.
-  const { outers, holes } = reliefRegion;
-  const { holesOf, parentHole } = nestBosses(outers, holes);
-  const bossBottoms = outers.map((r) => mb.ringLevel(r, topZ));
-  mb.cap(
-    plateTop,
-    bossBottoms.filter((_, i) => parentHole[i] < 0),
-    'up',
-    FaceTag.Cap,
-  );
+  const extrude = (ring: Ring, z0: number, z1: number, side: 'out' | 'in') => {
+    const bottom = mb.ringLevel(ring, z0);
+    const top = mb.ringLevel(ring, z1);
+    mb.wall(bottom, top, side, side === 'out' ? FaceTag.Outer : FaceTag.Inner);
+    return { bottom, top };
+  };
 
-  const holeBottoms = holes.map((h) => mb.ringLevel(h, topZ));
-  const holeTops = holes.map((h) => mb.ringLevel(h, reliefTopZ));
-  outers.forEach((outer, gi) => {
-    const outerTop = mb.ringLevel(outer, reliefTopZ);
-    mb.wall(bossBottoms[gi], outerTop, 'out', FaceTag.Outer);
-    mb.cap(outerTop, holesOf[gi].map((hi) => holeTops[hi]), 'up', FaceTag.Cap);
-    for (const hi of holesOf[gi]) {
-      mb.wall(holeBottoms[hi], holeTops[hi], 'in', FaceTag.Inner);
-      // Vlak "eiland" op plaathoogte binnen het gat van deze boss (bv. de kern van de contourring),
-      // met op zijn beurt een gat voor elke boss die in dat gat staat (bv. nerven).
-      const nested = outers.map((_, oi) => oi).filter((oi) => parentHole[oi] === hi);
-      mb.cap(holeBottoms[hi], nested.map((oi) => bossBottoms[oi]), 'up', FaceTag.Cap);
+  const plateOuters: RingLevel[] = [plateTop];
+  const plateHoles: RingLevel[] = [];
+  for (const island of islands.filter((i) => i.heightMm > 1e-9)) {
+    const z1 = topZ + island.heightMm;
+    const outer = extrude(island.outer, topZ, z1, 'out');
+    const holes = island.holes.map((h) => extrude(h, topZ, z1, 'in'));
+    // Plaatoppervlak: het eiland is er een gat in; zijn eigen gaten tonen weer plaatoppervlak.
+    plateHoles.push(outer.bottom);
+    plateOuters.push(...holes.map((h) => h.bottom));
+
+    const topOuters = [outer.top];
+    const topHoles = holes.map((h) => h.top);
+    const t = island.terrace;
+    if (t && t.heightMm > island.heightMm + 1e-9 && t.region.outers.length > 0) {
+      const z2 = topZ + t.heightMm;
+      const tOuters = t.region.outers.map((r) => extrude(r, z1, z2, 'out'));
+      const tHoles = t.region.holes.map((r) => extrude(r, z1, z2, 'in'));
+      topHoles.push(...tOuters.map((o) => o.bottom));
+      topOuters.push(...tHoles.map((h) => h.bottom));
+      capBetween(mb, tOuters.map((o) => o.top), tHoles.map((h) => h.top));
     }
-  });
+    capBetween(mb, topOuters, topHoles);
+  }
+  capBetween(mb, plateOuters, plateHoles);
 
   return mb.build();
 }
@@ -285,7 +358,9 @@ export interface StampBuildResult {
 
 /**
  * Bouwt een volledige stempel: plaat (met optionele inset t.o.v. een
- * cutter-binnenzijde), verhoogde contourlijn, detailribben en handvat.
+ * cutter-binnenzijde), verhoogde contourlijn (hoogte `contourHeight`, 0 =
+ * geen contourlijn), detailreliëf (hoogte `detailHeight`) en handvat.
+ * Gedeeld door de zelfstandige Stempel en Cutter & Stempel.
  */
 export function buildStamp(
   outer: Ring,
@@ -294,8 +369,8 @@ export function buildStamp(
   includeContour = true,
 ): StampBuildResult {
   const plateOuter = buildPlateOuter(outer, params.insetOffset ?? 0);
-  const { region, notices } = buildReliefRegion(plateOuter, details, params, includeContour);
+  const { islands, notices } = buildReliefLevels(plateOuter, details, params, includeContour);
   const handleRing = placeHandle(plateOuter, params.handleDiameter);
-  const mesh = buildStampMesh(plateOuter, region, handleRing, STAMP_INTERNAL.plateThicknessMm, params.reliefHeight, params.handleHeight);
+  const mesh = buildStampMesh(plateOuter, islands, handleRing, STAMP_INTERNAL.plateThicknessMm, params.handleHeight);
   return { mesh, notices };
 }

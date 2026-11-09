@@ -2,6 +2,13 @@ import type { ParamSpec, ShapeParameters } from '../engine/types';
 
 export type ParameterDraft = Record<string, string>;
 
+/** Is dit veld uitgeschakeld door de waarde van een ander veld (bv. "Dikte contour" bij "Hoogte contour" = 0)? */
+export function isParamDisabled(spec: ParamSpec, draft: ParameterDraft): boolean {
+  if (!spec.disabledWhen) return false;
+  const raw = (draft[spec.disabledWhen.key] ?? '').trim().replace(',', '.');
+  return raw !== '' && Number(raw) === spec.disabledWhen.equals;
+}
+
 interface ParameterPanelProps {
   specs: ParamSpec[];
   draft: ParameterDraft;
@@ -19,10 +26,12 @@ function Fields({
   return (
     <>
       {specs.map((spec) => {
-        const err = errors[spec.key];
+        const off = isParamDisabled(spec, draft);
+        const err = off ? undefined : errors[spec.key];
         const id = `param-${spec.key}`;
+        const controller = spec.disabledWhen ? specs.find((s) => s.key === spec.disabledWhen?.key) : undefined;
         return (
-          <div key={spec.key} className={`params__field${err ? ' has-error' : ''}`}>
+          <div key={spec.key} className={`params__field${err ? ' has-error' : ''}${off ? ' is-disabled' : ''}`}>
             <label htmlFor={id} className="params__label">
               {spec.label} <span className="params__unit">(mm)</span>
             </label>
@@ -36,6 +45,7 @@ function Fields({
                 max={spec.max}
                 step={spec.step}
                 value={draft[spec.key] ?? ''}
+                disabled={off}
                 aria-invalid={Boolean(err)}
                 aria-describedby={`${id}-hint`}
                 onChange={(e) => onChange(spec.key, e.target.value)}
@@ -45,7 +55,10 @@ function Fields({
               </span>
             </div>
             <p id={`${id}-hint`} className={err ? 'params__error' : 'params__hint'}>
-              {err ?? `${spec.hint} · ${spec.min}–${spec.max}`}
+              {err ??
+                (off
+                  ? `Niet gebruikt: ${(controller?.label ?? spec.disabledWhen?.key ?? '').toLowerCase()} is ${spec.disabledWhen?.equals} mm`
+                  : `${spec.hint} · ${spec.min}–${spec.max}`)}
             </p>
           </div>
         );

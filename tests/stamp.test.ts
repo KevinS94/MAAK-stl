@@ -29,7 +29,7 @@ describe('stempel: basisplaat en reliëf', () => {
     (name) => {
       const contour = contourOf(SVG[name]);
       const { mesh } = buildStamp(contour.outer, [], P, true);
-      const totalHeight = P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.reliefHeight;
+      const totalHeight = P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.contourHeight;
       expectValidSolid(mesh, totalHeight);
     },
   );
@@ -38,16 +38,16 @@ describe('stempel: basisplaat en reliëf', () => {
     for (const contourWidth of [0.6, 1.2, 2.5]) {
       const contour = contourOf(SVG.circle);
       const { mesh } = buildStamp(contour.outer, [], { ...P, contourWidth }, true);
-      expectValidSolid(mesh, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.reliefHeight);
+      expectValidSolid(mesh, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.contourHeight);
     }
   });
 
-  it('variabele reliëfhoogte wordt exact toegepast op de totale hoogte', () => {
-    for (const reliefHeight of [0.4, 1.5, 3]) {
+  it('variabele contourhoogte wordt exact toegepast op de totale hoogte', () => {
+    for (const contourHeight of [0.4, 1.5, 3]) {
       const contour = contourOf(SVG.circle);
-      const { mesh } = buildStamp(contour.outer, [], { ...P, reliefHeight }, true);
+      const { mesh } = buildStamp(contour.outer, [], { ...P, contourHeight }, true);
       const report = validateMesh(mesh);
-      expect(report.bounds.max[2]).toBeCloseTo(P.handleHeight + STAMP_INTERNAL.plateThicknessMm + reliefHeight, 6);
+      expect(report.bounds.max[2]).toBeCloseTo(P.handleHeight + STAMP_INTERNAL.plateThicknessMm + contourHeight, 6);
     }
   });
 
@@ -55,7 +55,7 @@ describe('stempel: basisplaat en reliëf', () => {
     const contour = contourOf(SVG.circle); // r = 35 mm
     const { mesh } = buildStamp(contour.outer, [], P, true);
     const plateTop = P.handleHeight + STAMP_INTERNAL.plateThicknessMm;
-    const reliefTop = plateTop + P.reliefHeight;
+    const reliefTop = plateTop + P.contourHeight;
     const onLine = 35 - (P.contourWidth / 2 + STAMP_INTERNAL.raisedContourInsetMm);
     expect(coveredAt(mesh, { x: onLine, y: 0 }, reliefTop)).toBe(true);
     expect(coveredAt(mesh, { x: 0, y: 0 }, reliefTop)).toBe(false);
@@ -66,7 +66,7 @@ describe('stempel: basisplaat en reliëf', () => {
     const sel = selectionOf(SVG.circleWithFilledBands); // banden rond y = ±10 mm
     const { mesh } = buildStamp(sel.contour.outer, sel.details, P, true);
     const plateTop = P.handleHeight + STAMP_INTERNAL.plateThicknessMm;
-    const reliefTop = plateTop + P.reliefHeight;
+    const reliefTop = plateTop + P.contourHeight;
     expectValidSolid(mesh, reliefTop);
     expect(coveredAt(mesh, { x: 0, y: 10 }, reliefTop)).toBe(true);
     expect(coveredAt(mesh, { x: 0, y: -10 }, reliefTop)).toBe(true);
@@ -77,21 +77,21 @@ describe('stempel: basisplaat en reliëf', () => {
   it('open detaillijnen (nerven) worden verhoogde ribben die de mesh geldig houden', () => {
     const sel = selectionOf(SVG.leafWithVeins);
     const { mesh } = buildStamp(sel.contour.outer, sel.details, P, true);
-    expectValidSolid(mesh, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.reliefHeight);
+    expectValidSolid(mesh, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.contourHeight);
   });
 
   it('variabele detailbreedte blijft geldig', () => {
     const sel = selectionOf(SVG.leafWithVeins);
     for (const detailWidth of [0.4, 1.0, 2.0]) {
       const { mesh } = buildStamp(sel.contour.outer, sel.details, { ...P, detailWidth }, true);
-      expectValidSolid(mesh, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.reliefHeight);
+      expectValidSolid(mesh, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.contourHeight);
     }
   });
 
   it('een gesloten detailpad (ring) wordt een geldige annulus-rib', () => {
     const sel = selectionOf(SVG.circleWithClosedDetail);
     const { mesh } = buildStamp(sel.contour.outer, sel.details, P, true);
-    expectValidSolid(mesh, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.reliefHeight);
+    expectValidSolid(mesh, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.contourHeight);
   });
 
   it('kruisende detaillijnen worden samengevoegd tot geldige geometrie', () => {
@@ -102,7 +102,7 @@ describe('stempel: basisplaat en reliëf', () => {
     const sel = selectionOf(svg);
     expect(sel.details).toHaveLength(2);
     const { mesh } = buildStamp(sel.contour.outer, sel.details, P, true);
-    expectValidSolid(mesh, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.reliefHeight);
+    expectValidSolid(mesh, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.contourHeight);
   });
 });
 
@@ -125,7 +125,7 @@ describe('stempel: handvat', () => {
     const contour = contourOf(SVG.circle);
     const { mesh } = buildStamp(contour.outer, [], { ...P, handleHeight }, true);
     const report = validateMesh(mesh);
-    expect(report.bounds.max[2]).toBeCloseTo(handleHeight + STAMP_INTERNAL.plateThicknessMm + P.reliefHeight, 6);
+    expect(report.bounds.max[2]).toBeCloseTo(handleHeight + STAMP_INTERNAL.plateThicknessMm + P.contourHeight, 6);
   });
 
   it('een te grote diameter op een kleine vorm geeft een duidelijke foutmelding in plaats van ongeldige geometrie', () => {
@@ -155,7 +155,7 @@ describe('stempel: handvat', () => {
 
 describe('stempel: generator end-to-end', () => {
   it('ongeldige parameters worden geweigerd', () => {
-    const r = stampGenerator.generate(contourOf(SVG.circle), [], { ...P, reliefHeight: 0 });
+    const r = stampGenerator.generate(contourOf(SVG.circle), [], { ...P, detailHeight: 0 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('INVALID_PARAMETERS');
   });
@@ -164,6 +164,6 @@ describe('stempel: generator end-to-end', () => {
     const sel = selectionOf(SVG.leafWithVeins);
     const r = stampGenerator.generate(sel.contour, sel.details, P);
     expect(r.ok).toBe(true);
-    if (r.ok) expectValidSolid(r.value, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.reliefHeight);
+    if (r.ok) expectValidSolid(r.value, P.handleHeight + STAMP_INTERNAL.plateThicknessMm + P.contourHeight);
   });
 });

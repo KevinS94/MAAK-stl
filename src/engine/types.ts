@@ -28,6 +28,11 @@ export interface ParamSpec {
   default: number;
   /** Optioneel groepslabel (bv. "Cookie cutter" / "Stempel" bij Cutter & Stempel). */
   group?: string;
+  /**
+   * Het veld wordt uitgeschakeld (maar blijft zichtbaar) wanneer een andere
+   * parameter deze waarde heeft, bv. "Dikte contour" bij "Hoogte contour" = 0.
+   */
+  disabledWhen?: { key: string; equals: number };
 }
 
 export interface Point2 {

@@ -173,6 +173,8 @@ Na het schalen wordt de vorm in het XY-vlak rond (0, 0) gecentreerd; de afmeting
 
 **Details.** Lijnen (strokes) worden een band van exact de ingestelde *Dikte details*. Gevulde vormen/banden (zoals Canva-nerven) worden op hun getekende breedte gebruikt en niet nogmaals verbreed.
 
+**Stempelreliëf.** *Hoogte contour* (standaard 1,5 mm, minimum 0) en *Hoogte details* (standaard 1,5 mm) zijn onafhankelijk instelbaar in Expertmodus, voor Stempel en Cutter & Stempel (gedeelde stempelgeometrie). Bij hoogte contour 0 mm wordt er geen verhoogde contourlijn gemaakt en is *Dikte contour* uitgeschakeld; plaat, details en handvat blijven ongewijzigd. Reliëfeilanden van één soort staan exact op hun eigen hoogte. Waar contour en details elkaar raken met een verschillende hoogte, staat dat eiland op de laagste hoogte en krijgt het hogere deel een terras dat 0,05 mm binnen de rand blijft, zodat er nooit samenvallende wanden of gedegenereerde driehoeken ontstaan.
+
 **Curves** worden adaptief omgezet naar polygonen: maximaal 0,25 mm per lijnstukje op de uiteindelijke afmeting (min. 4, max. 720 per curve). Bij een cirkel van 70 mm is de afwijking kleiner dan 0,01 mm.
 
 **Veiligheid.** SVG-bestanden worden als niet-vertrouwde invoer behandeld:

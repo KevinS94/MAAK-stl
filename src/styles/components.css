@@ -613,6 +613,16 @@
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
+.params__field.is-disabled .params__label,
+.params__field.is-disabled .params__input {
+  color: var(--text-tertiary);
+}
+
+.params__field.is-disabled .params__input {
+  background: var(--surface-muted);
+  cursor: not-allowed;
+}
+
 .params__field.has-error .params__input {
   border-color: var(--danger);
 }

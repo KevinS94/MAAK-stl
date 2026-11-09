@@ -244,8 +244,8 @@ describe('7. het Canva-blad (getekende rand + nerven via geneste clipping)', () 
       // Het nervenreliëf voegt volume toe: ongeveer de nervenoppervlakte × de reliëfhoogte.
       const extra = stamp.value.report.volumeMm3 - noDetails.value.report.volumeMm3;
       const veinsArea = regionArea(buildDetailRegion(sel.details, DEFAULT_PARAMETERS.stamp.detailWidth));
-      expect(extra).toBeGreaterThan(0.9 * veinsArea * DEFAULT_PARAMETERS.stamp.reliefHeight);
-      expect(extra).toBeLessThan(1.05 * veinsArea * DEFAULT_PARAMETERS.stamp.reliefHeight);
+      expect(extra).toBeGreaterThan(0.9 * veinsArea * DEFAULT_PARAMETERS.stamp.detailHeight);
+      expect(extra).toBeLessThan(1.05 * veinsArea * DEFAULT_PARAMETERS.stamp.detailHeight);
     }
     const combo = generateFromSelection(sel.contour, sel.details, 'cutterStamp', DEFAULT_PARAMETERS.cutterStamp);
     expect(combo.ok).toBe(true);

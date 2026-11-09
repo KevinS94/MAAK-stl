@@ -5,7 +5,7 @@ import { GeneratorTabs } from './components/GeneratorTabs';
 import { Header } from './components/Header';
 import { HelpDialog } from './components/HelpDialog';
 import { ModeToggle } from './components/ModeToggle';
-import { draftFromDefaults, ParameterPanel, type ParameterDraft } from './components/ParameterPanel';
+import { draftFromDefaults, isParamDisabled, ParameterPanel, type ParameterDraft } from './components/ParameterPanel';
 import { PathSelector } from './components/PathSelector';
 import { Preview3D } from './components/Preview3D';
 import { SVGUploader, type FileStatus } from './components/SVGUploader';
@@ -69,6 +69,11 @@ function parseDraft(draft: ParameterDraft, generator: GeneratorType) {
   for (const spec of specs) {
     const raw = (draft[spec.key] ?? '').trim().replace(',', '.');
     const n = raw === '' ? NaN : Number(raw);
+    if (isParamDisabled(spec, draft)) {
+      // Uitgeschakeld veld: wordt niet gebruikt, mag Start dus niet blokkeren.
+      values[spec.key] = Number.isFinite(n) && n >= spec.min && n <= spec.max ? n : spec.default;
+      continue;
+    }
     if (!Number.isFinite(n)) errors[spec.key] = 'Vul een getal in.';
     else if (n < spec.min || n > spec.max) errors[spec.key] = `Kies een waarde tussen ${spec.min} en ${spec.max} mm.`;
     values[spec.key] = n;
