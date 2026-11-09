@@ -1,12 +1,17 @@
 import { buildContourOrThrow } from '../src/engine/contourProcessing';
-import { parseSvgOrThrow, parseSvgPathsOrThrow } from '../src/engine/svgParser';
-import { buildSelectionOrThrow, defaultRoles, extractPathCandidates, type ContourSelection } from '../src/engine/svgPaths';
+import { parseSvgOrThrow, parseSvgSceneOrThrow } from '../src/engine/svgParser';
+import { buildSelectionOrThrow, defaultRoles, extractPathCandidates, type ContourSelection, type Granularity } from '../src/engine/svgPaths';
 import type { FrameSizeMm, MeshData, PathRole, SvgPathCandidate, ValidatedContour } from '../src/engine/types';
 
 export const BASIC: FrameSizeMm = { length: 100, width: 100 };
 
 export function contourOf(svg: string, frame: FrameSizeMm = BASIC): ValidatedContour {
   return buildContourOrThrow(parseSvgOrThrow(svg), frame);
+}
+
+/** Alle selecteerbare onderdelen van een SVG (stap A + B), met voorgestelde rollen. */
+export function candidatesOf(svg: string, frame: FrameSizeMm = BASIC, granularity: Granularity = 'shapes'): SvgPathCandidate[] {
+  return extractPathCandidates(parseSvgSceneOrThrow(svg), frame, granularity);
 }
 
 /**
@@ -18,9 +23,9 @@ export function selectionOf(
   svg: string,
   frame: FrameSizeMm = BASIC,
   roleOf?: (candidate: SvgPathCandidate) => PathRole,
+  granularity: Granularity = 'shapes',
 ): ContourSelection {
-  const raw = parseSvgPathsOrThrow(svg);
-  const candidates = extractPathCandidates(raw, frame);
+  const candidates = candidatesOf(svg, frame, granularity);
   const roles = roleOf ? Object.fromEntries(candidates.map((c) => [c.id, roleOf(c)])) : defaultRoles(candidates);
   return buildSelectionOrThrow(candidates, roles, frame);
 }

@@ -10,12 +10,18 @@ import { PathSelector } from './components/PathSelector';
 import { Preview3D } from './components/Preview3D';
 import { SVGUploader, type FileStatus } from './components/SVGUploader';
 import { BASIC_FRAME_MM, DEFAULT_PARAMETERS, PARAMS_BY_GENERATOR } from './config/defaults';
-import { buildContour } from './engine/contourProcessing';
 import { toResult } from './engine/errors';
-import { generateFromSelection, generateModel } from './engine/pipeline';
+import { generateFromSelection } from './engine/pipeline';
 import { comboStlFileNames, exportBinaryStl, stlFileName } from './engine/stlExporter';
-import { parseSvg, parseSvgPathsOrThrow, type SvgRawGeometry } from './engine/svgParser';
-import { buildSelection, defaultRoles, extractPathCandidates, isSelectionUnambiguous } from './engine/svgPaths';
+import type { SvgScene } from './engine/svgParser';
+import {
+  buildSelection,
+  extractPathCandidates,
+  hasGroupedShapes,
+  importSvg,
+  transferRoles,
+  type Granularity,
+} from './engine/svgPaths';
 import { frameSizeFor } from './engine/svgScaling';
 import { validateSvgFile } from './engine/svgValidation';
 import type {
@@ -27,7 +33,6 @@ import type {
   GeometryValidationError,
   PathRole,
   Result,
-  SVGGeometry,
   ShapeParameters,
   SvgPathCandidate,
   ValidatedContour,
@@ -41,9 +46,11 @@ type GenerationState =
   | { status: 'successCombo'; result: ComboGenerationResult; fileNames: { cutter: string; stamp: string } }
   | { status: 'error'; error: GeometryValidationError };
 
-interface PathSelectionState {
+/** Geïmporteerde SVG (stap A) + de rolkeuze van de gebruiker (stap B). */
+interface SvgState {
+  scene: SvgScene;
+  granularity: Granularity;
   roles: Record<string, PathRole>;
-  unambiguous: boolean;
 }
 
 function initialDrafts(): Record<GeneratorType, ParameterDraft> {
@@ -86,9 +93,7 @@ export default function App() {
   const [mode, setMode] = useState<ApplicationMode>('basis');
   const [drafts, setDrafts] = useState(initialDrafts);
   const [file, setFile] = useState<FileStatus>({ status: 'empty' });
-  const [geometry, setGeometry] = useState<SVGGeometry | null>(null);
-  const [rawGeometry, setRawGeometry] = useState<SvgRawGeometry | null>(null);
-  const [pathState, setPathState] = useState<PathSelectionState | null>(null);
+  const [svg, setSvg] = useState<SvgState | null>(null);
   const [generation, setGeneration] = useState<GenerationState>({ status: 'idle' });
   const [comboView, setComboView] = useState<'cutter' | 'stamp'>('cutter');
   const [helpOpen, setHelpOpen] = useState(false);
@@ -105,34 +110,29 @@ export default function App() {
     setGeneration({ status: 'idle' });
   }, []);
 
-  const selectionFrame = useMemo(
-    () => frameSizeFor(paramsValid ? mode : 'basis', paramsValid ? params : activeGenerator.defaults),
-    [mode, params, paramsValid, activeGenerator],
-  );
+  const frame = frameSizeFor(paramsValid ? mode : 'basis', paramsValid ? params : activeGenerator.defaults);
+  const selectionFrame = useMemo(() => ({ length: frame.length, width: frame.width }), [frame.length, frame.width]);
 
-  // Bij een SVG met meerdere vectorpaden/open lijnen: alle kandidaten op de huidige schaal.
-  const candidatesAtFrame = useMemo<SvgPathCandidate[] | null>(
-    () => (rawGeometry ? extractPathCandidates(rawGeometry, selectionFrame) : null),
-    [rawGeometry, selectionFrame],
+  // Stap B: alle selecteerbare vormen/lijnen op de schaal die bij Start gebruikt wordt.
+  const candidatesResult = useMemo<Result<SvgPathCandidate[]> | null>(
+    () => (svg ? toResult(() => extractPathCandidates(svg.scene, selectionFrame, svg.granularity)) : null),
+    [svg, selectionFrame],
   );
+  const candidates = candidatesResult?.ok ? candidatesResult.value : null;
 
-  // 2D-preview van de contour, op de schaal die bij Start gebruikt wordt.
+  // Stap C: generatorvalidatie van de gekozen buitencontour (ook voor de 2D-preview).
   const preview = useMemo((): Result<ValidatedContour> | null => {
-    if (pathState && candidatesAtFrame) {
-      const sel = buildSelection(candidatesAtFrame, pathState.roles, selectionFrame);
-      return sel.ok ? { ok: true, value: sel.value.contour } : sel;
-    }
-    if (!geometry) return null;
-    return buildContour(geometry, selectionFrame);
-  }, [pathState, candidatesAtFrame, geometry, selectionFrame]);
+    if (!svg || !candidatesResult) return null;
+    if (!candidatesResult.ok) return candidatesResult;
+    const sel = buildSelection(candidatesResult.value, svg.roles, selectionFrame, svg.scene.notices);
+    return sel.ok ? { ok: true, value: sel.value.contour } : sel;
+  }, [svg, candidatesResult, selectionFrame]);
 
   const handleFile = useCallback(
     async (f: File) => {
       invalidate();
       const id = requestRef.current;
-      setGeometry(null);
-      setRawGeometry(null);
-      setPathState(null);
+      setSvg(null);
       setFile({ status: 'processing', name: f.name });
       const check = toResult(() => validateSvgFile(f));
       if (!check.ok) {
@@ -152,36 +152,17 @@ export default function App() {
       }
       if (id !== requestRef.current) return;
 
-      // Eenvoudige, ondubbelzinnige SVG (één gesloten gevulde vorm): automatische keten, ongewijzigd.
-      const legacy = parseSvg(text);
-      if (legacy.ok) {
-        const contourCheck = buildContour(legacy.value, BASIC_FRAME_MM);
-        if (id !== requestRef.current) return;
-        if (contourCheck.ok) {
-          setGeometry(legacy.value);
-          setFile({ status: 'valid', name: f.name });
-          return;
-        }
-        setFile({ status: 'invalid', name: f.name, error: contourCheck.error });
+      // Stap A + B: inlezen en alle zichtbare geometrie herkennen. Meerdere losse
+      // vormen of open lijnen zijn hier nooit een fout; de gebruiker kiest de rollen
+      // en pas daarna wordt de gekozen buitencontour gevalideerd (stap C).
+      const imported = importSvg(text, BASIC_FRAME_MM);
+      if (id !== requestRef.current) return;
+      if (!imported.ok) {
+        setFile({ status: 'invalid', name: f.name, error: imported.error });
         return;
       }
-
-      // SVG met open lijnen (stroke zonder vulling): universele padselector.
-      if (legacy.error.code === 'SVG_STROKE_ONLY') {
-        const raw = toResult(() => parseSvgPathsOrThrow(text));
-        if (id !== requestRef.current) return;
-        if (!raw.ok) {
-          setFile({ status: 'invalid', name: f.name, error: raw.error });
-          return;
-        }
-        const candidates = extractPathCandidates(raw.value, BASIC_FRAME_MM);
-        setRawGeometry(raw.value);
-        setPathState({ roles: defaultRoles(candidates), unambiguous: isSelectionUnambiguous(candidates, BASIC_FRAME_MM) });
-        setFile({ status: 'valid', name: f.name });
-        return;
-      }
-
-      setFile({ status: 'invalid', name: f.name, error: legacy.error });
+      setSvg({ scene: imported.value.scene, granularity: 'shapes', roles: imported.value.roles });
+      setFile({ status: 'valid', name: f.name });
     },
     [invalidate],
   );
@@ -206,9 +187,7 @@ export default function App() {
 
   const clearFile = useCallback(() => {
     invalidate();
-    setGeometry(null);
-    setRawGeometry(null);
-    setPathState(null);
+    setSvg(null);
     setFile({ status: 'empty' });
   }, [invalidate]);
 
@@ -228,11 +207,19 @@ export default function App() {
   };
   const changeRoles = (roles: Record<string, PathRole>) => {
     invalidate();
-    setPathState((s) => (s ? { ...s, roles } : s));
+    setSvg((s) => (s ? { ...s, roles } : s));
+  };
+  const changeGranularity = (granularity: Granularity) => {
+    if (!svg || !candidates || granularity === svg.granularity) return;
+    const next = toResult(() => extractPathCandidates(svg.scene, selectionFrame, granularity));
+    if (!next.ok) return;
+    invalidate();
+    // De keuze van de gebruiker blijft behouden: onderdelen erven de rol van hun vorm (en omgekeerd).
+    setSvg({ ...svg, granularity, roles: transferRoles(candidates, svg.roles, next.value) });
   };
 
   const previewError = preview && !preview.ok ? preview.error : null;
-  const canStart = Boolean(geometry || rawGeometry) && file.status === 'valid' && paramsValid && !previewError;
+  const canStart = Boolean(svg) && file.status === 'valid' && paramsValid && !previewError;
 
   const start = () => {
     if (!canStart) return;
@@ -242,36 +229,22 @@ export default function App() {
       mode,
       params: { ...params },
       fileName: file.status === 'valid' ? file.name : 'vorm.svg',
-      geometry,
-      rawGeometry,
-      roles: pathState?.roles ?? null,
+      svg,
     };
     setGeneration({ status: 'generating' });
     // Even wachten zodat de knopstatus zichtbaar wordt; de berekening zelf is synchroon.
     window.setTimeout(() => {
       if (id !== requestRef.current) return;
 
-      let result: Result<GenerationResult | ComboGenerationResult>;
-      const generatorDef = getGenerator(snapshot.generator);
-      // Cookie cutter/vulvorm zonder padselectie blijven de ongewijzigde legacy keten gebruiken;
-      // stempel/cutter & stempel (of elke generator mét een actieve padselectie) gebruiken altijd
-      // de contour+details-keten, ook op een eenvoudige SVG zonder open lijnen.
-      const isLegacySimple = generatorDef.kind === 'single' && !generatorDef.usesDetails;
-
-      if (snapshot.roles && snapshot.rawGeometry) {
-        const frame = frameSizeFor(snapshot.mode, snapshot.params);
-        const candidates = extractPathCandidates(snapshot.rawGeometry, frame);
-        const sel = buildSelection(candidates, snapshot.roles, frame);
-        result = sel.ok ? generateFromSelection(sel.value.contour, sel.value.details, snapshot.generator, snapshot.params) : sel;
-      } else if (snapshot.geometry && isLegacySimple) {
-        result = generateModel(snapshot.geometry, snapshot.generator, snapshot.mode, snapshot.params);
-      } else if (snapshot.geometry) {
-        const frame = frameSizeFor(snapshot.mode, snapshot.params);
-        const contourResult = buildContour(snapshot.geometry, frame);
-        result = contourResult.ok ? generateFromSelection(contourResult.value, [], snapshot.generator, snapshot.params) : contourResult;
-      } else {
-        return;
-      }
+      if (!snapshot.svg) return;
+      // Elke generator volgt dezelfde keten: rollen -> gevalideerde contour + details -> mesh.
+      const frame = frameSizeFor(snapshot.mode, snapshot.params);
+      const { scene, granularity, roles } = snapshot.svg;
+      const found = toResult(() => extractPathCandidates(scene, frame, granularity));
+      const selection = found.ok ? buildSelection(found.value, roles, frame, scene.notices) : found;
+      const result: Result<GenerationResult | ComboGenerationResult> = selection.ok
+        ? generateFromSelection(selection.value.contour, selection.value.details, snapshot.generator, snapshot.params)
+        : selection;
       if (id !== requestRef.current) return;
 
       if (!result.ok) {
@@ -338,13 +311,16 @@ export default function App() {
               onClear={clearFile}
             />
 
-            {pathState && candidatesAtFrame && (
+            {svg && candidates && (candidates.length > 1 || svg.granularity === 'elements') && (
               <PathSelector
-                candidates={candidatesAtFrame}
-                roles={pathState.roles}
+                candidates={candidates}
+                roles={svg.roles}
                 frame={selectionFrame}
+                granularity={svg.granularity}
+                canSplit={hasGroupedShapes(candidates)}
                 disabled={busy}
                 onChange={changeRoles}
+                onGranularity={changeGranularity}
               />
             )}
 

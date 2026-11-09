@@ -7,7 +7,7 @@ import { stampGenerator } from '../src/generators/stamp';
 import { buildPlateOuter, buildStamp, findInteriorSupportPoint, placeHandle } from '../src/generators/stampGeometry';
 import { SVG } from './fixtures';
 import { contourOf, selectionOf } from './helpers';
-import { expectValidSolid } from './meshChecks';
+import { coveredAt, expectValidSolid } from './meshChecks';
 
 const P = STAMP_DEFAULTS;
 
@@ -49,6 +49,29 @@ describe('stempel: basisplaat en reliëf', () => {
       const report = validateMesh(mesh);
       expect(report.bounds.max[2]).toBeCloseTo(P.handleHeight + STAMP_INTERNAL.plateThicknessMm + reliefHeight, 6);
     }
+  });
+
+  it('de verhoogde contour is een smalle ring: het midden van de plaat blijft vlak (regressie gatenoriëntatie)', () => {
+    const contour = contourOf(SVG.circle); // r = 35 mm
+    const { mesh } = buildStamp(contour.outer, [], P, true);
+    const plateTop = P.handleHeight + STAMP_INTERNAL.plateThicknessMm;
+    const reliefTop = plateTop + P.reliefHeight;
+    const onLine = 35 - (P.contourWidth / 2 + STAMP_INTERNAL.raisedContourInsetMm);
+    expect(coveredAt(mesh, { x: onLine, y: 0 }, reliefTop)).toBe(true);
+    expect(coveredAt(mesh, { x: 0, y: 0 }, reliefTop)).toBe(false);
+    expect(coveredAt(mesh, { x: 0, y: 0 }, plateTop)).toBe(true);
+  });
+
+  it('gevulde details binnen de contourring worden verhoogd, ertussen blijft de plaat vlak', () => {
+    const sel = selectionOf(SVG.circleWithFilledBands); // banden rond y = ±10 mm
+    const { mesh } = buildStamp(sel.contour.outer, sel.details, P, true);
+    const plateTop = P.handleHeight + STAMP_INTERNAL.plateThicknessMm;
+    const reliefTop = plateTop + P.reliefHeight;
+    expectValidSolid(mesh, reliefTop);
+    expect(coveredAt(mesh, { x: 0, y: 10 }, reliefTop)).toBe(true);
+    expect(coveredAt(mesh, { x: 0, y: -10 }, reliefTop)).toBe(true);
+    expect(coveredAt(mesh, { x: 0, y: 0 }, reliefTop)).toBe(false);
+    expect(coveredAt(mesh, { x: 0, y: 0 }, plateTop)).toBe(true);
   });
 
   it('open detaillijnen (nerven) worden verhoogde ribben die de mesh geldig houden', () => {

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MeshData } from '../src/engine/types';
-import { SVG } from './fixtures';
+import { canvaLeafSvg, SVG } from './fixtures';
 
 vi.mock('../src/components/Preview3D', () => ({
   Preview3D: ({ mesh }: { mesh: MeshData }) => <div data-testid="preview3d" data-triangles={mesh.indices.length / 3} />,
@@ -53,7 +53,7 @@ describe('App: Stempel en Cutter & Stempel', () => {
     await user.click(screen.getByRole('tab', { name: 'Stempel' }));
     await upload('blad.svg', SVG.leafWithVeins);
 
-    expect(await screen.findByRole('img', { name: /Alle vectorpaden/ })).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: /Alle vormen en lijnen/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
 
     await user.click(screen.getByRole('button', { name: 'Start' }));
@@ -82,6 +82,67 @@ describe('App: Stempel en Cutter & Stempel', () => {
     expect(screen.getAllByRole('button', { name: /Download STL/ })).toHaveLength(2);
     expect(screen.getByText('maak-cutter-stempel-cutter-ster.stl')).toBeInTheDocument();
     expect(screen.getByText('maak-cutter-stempel-stempel-ster.stl')).toBeInTheDocument();
+  });
+
+  it('twee losse vormen: selector i.p.v. fout; beide als buitencontour geeft pas dan een melding', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await upload('twee.svg', SVG.circleAndSquare);
+    expect(await screen.findByRole('img', { name: /Alle vormen en lijnen/ })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText(/vorm ≈ 40 × 40 mm/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
+
+    const selects = screen.getAllByRole('combobox', { name: /Rol van/ });
+    expect(selects).toHaveLength(2);
+    for (const s of selects) await user.selectOptions(s, 'outer');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/2 losse delen/);
+    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+
+    // De cirkel als enige buitencontour kiezen.
+    await user.selectOptions(selects[1], 'ignore');
+    expect(await screen.findByText(/vorm ≈ 30 × 30 mm/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
+  });
+
+  it('Canva-blad: rand als buitencontour, nerven als detail; Cutter & Stempel levert twee STL-bestanden', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    await user.click(screen.getByRole('tab', { name: /Cutter & Stempel/ }));
+    await upload('blad.svg', canvaLeafSvg());
+
+    expect(await screen.findByRole('img', { name: /Alle vormen en lijnen/ })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    const selects = screen.getAllByRole('combobox', { name: /Rol van/ });
+    expect(selects.map((s) => (s as HTMLSelectElement).value)).toEqual(['outer', 'detail']);
+    expect(screen.getByRole('combobox', { name: /Getekende rand/ })).toHaveValue('outer');
+    expect(screen.getByText(/volledig opgevuld/)).toBeInTheDocument();
+    expect(screen.getByText(/vorm ≈ 71 × 81 mm/)).toBeInTheDocument();
+
+    // Aanklikken in de preview wisselt de rol van de hele logische vorm.
+    const veins = container.querySelector('path[data-role="detail"]')!;
+    await user.click(veins);
+    expect(screen.getAllByRole('combobox', { name: /Rol van/ })[1]).toHaveValue('ignore');
+    await user.selectOptions(screen.getAllByRole('combobox', { name: /Rol van/ })[1], 'detail');
+
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    await screen.findByTestId('preview3d', {}, { timeout: 20000 });
+    await user.click(screen.getAllByRole('button', { name: /Download STL/ })[0]);
+    await user.click(screen.getAllByRole('button', { name: /Download STL/ })[1]);
+    expect(downloads.map((d) => d.name)).toEqual(['maak-cutter-stempel-cutter-blad.stl', 'maak-cutter-stempel-stempel-blad.stl']);
+  });
+
+  it('Canva-blad: afzonderlijke onderdelen tonen behoudt de keuze', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await upload('blad.svg', canvaLeafSvg());
+    await user.click(await screen.findByRole('button', { name: 'Toon afzonderlijke onderdelen' }));
+    const selects = screen.getAllByRole('combobox', { name: /Rol van/ });
+    expect(selects.length).toBeGreaterThan(2);
+    expect(selects.filter((s) => (s as HTMLSelectElement).value === 'detail')).toHaveLength(1);
+    expect(screen.getByText(/vorm ≈ 71 × 81 mm/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Groepeer tot zichtbare vormen' }));
+    expect(screen.getAllByRole('combobox', { name: /Rol van/ })).toHaveLength(2);
   });
 
   it('Expert bij Cutter & Stempel toont twee gegroepeerde parametersecties', async () => {

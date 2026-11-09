@@ -356,8 +356,10 @@
 }
 
 .path-selector__svg {
-  width: 180px;
-  height: 180px;
+  width: 240px;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 1;
   flex: none;
   background: var(--surface-muted);
   border-radius: var(--radius-sm);
@@ -365,6 +367,7 @@
 
 .path-selector__path {
   cursor: pointer;
+  transition: stroke 120ms ease;
 }
 
 .path-selector__list {
@@ -383,6 +386,13 @@
   align-items: center;
   gap: 8px;
   font-size: 0.85rem;
+  padding: 2px 6px;
+  margin: 0 -6px;
+  border-radius: var(--radius-sm);
+}
+
+.path-selector__item.is-hovered {
+  background: var(--surface-muted);
 }
 
 .path-selector__swatch {
@@ -398,8 +408,26 @@
 }
 
 .path-selector__role {
+  font: inherit;
   font-weight: 600;
   font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  flex: none;
+}
+
+.path-selector__granularity {
+  align-self: flex-start;
+  font-size: 0.825rem;
+}
+
+@media (max-width: 520px) {
+  .path-selector__svg {
+    width: 100%;
+  }
 }
 
 /* ---------- Modelwissel (Cutter & Stempel) ---------- */

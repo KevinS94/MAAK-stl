@@ -75,11 +75,21 @@ export function buildRaisedContourRegion(plateOuter: Ring, contourWidth: number)
   return band;
 }
 
+/**
+ * Reliëfgebied van de stempeldetails.
+ * - Lijnen (open of gesloten omlijningen) worden een band van exact
+ *   `detailWidth` mm breed (halve breedte aan elke kant van de lijn).
+ * - Reeds gevulde vormen/banden uit de SVG worden ongewijzigd gebruikt:
+ *   hun breedte is de getekende breedte op de gekozen kaderschaal. Ze
+ *   nogmaals verbreden zou de reliëfbreedte onvoorspelbaar maken.
+ */
 export function buildDetailRegion(details: DetailLine[], detailWidth: number): RegionRings {
   const halfW = detailWidth / 2;
-  const regions = details
-    .filter((d) => d.ring.length >= 2)
-    .map((d) => (d.closed ? offsetClosedPolyline(d.ring, halfW) : offsetOpenPolyline(d.ring, halfW)));
+  const regions = details.map((d): RegionRings => {
+    if (d.region) return { outers: d.region.outers, holes: d.region.holes };
+    if (d.ring.length < 2) return { outers: [], holes: [] };
+    return d.closed ? offsetClosedPolyline(d.ring, halfW) : offsetOpenPolyline(d.ring, halfW);
+  });
   return unionRegions(regions);
 }
 
@@ -122,8 +132,37 @@ export function buildReliefRegion(
   return { region: { outers, holes }, notices };
 }
 
-function groupHolesToOuters(outers: Ring[], holes: Ring[]): { outer: Ring; holes: Ring[] }[] {
-  return outers.map((outer) => ({ outer, holes: holes.filter((h) => h.length > 0 && pointInRing(h[0], outer)) }));
+/**
+ * Nesting van de reliëfvormen ("bosses"): elk gat hoort bij de kleinste
+ * boss die het omsluit, en elke boss ligt ofwel rechtstreeks op de plaat
+ * (`parentHole = -1`) ofwel in het gat van een andere boss (bv. nerven
+ * binnen de verhoogde contourring).
+ */
+interface BossNesting {
+  /** Per boss: indices van zijn eigen gaten. */
+  holesOf: number[][];
+  /** Per boss: index van het gat waarin hij ligt, of -1. */
+  parentHole: number[];
+}
+
+function nestBosses(outers: Ring[], holes: Ring[]): BossNesting {
+  const area = (r: Ring) => Math.abs(signedArea(r));
+  const holesOf: number[][] = outers.map(() => []);
+  holes.forEach((h, hi) => {
+    let best = -1;
+    outers.forEach((o, oi) => {
+      if (area(o) > area(h) && pointInRing(h[0], o) && (best < 0 || area(o) < area(outers[best]))) best = oi;
+    });
+    if (best >= 0) holesOf[best].push(hi);
+  });
+  const parentHole = outers.map((o) => {
+    let best = -1;
+    holes.forEach((h, hi) => {
+      if (area(h) > area(o) && pointInRing(o[0], h) && (best < 0 || area(h) < area(holes[best]))) best = hi;
+    });
+    return best;
+  });
+  return { holesOf, parentHole };
 }
 
 /* ------------------------------------------------------------------ */
@@ -210,24 +249,30 @@ export function buildStampMesh(
   const plateTop = mb.ringLevel(plateOuter, topZ);
   mb.wall(plateBottom, plateTop, 'out', FaceTag.Outer);
 
-  // Bovenkant van de plaat: volledig vlak, met een gat per reliëfvorm (boss).
-  const bossBottoms = reliefRegion.outers.map((r) => mb.ringLevel(r, topZ));
-  mb.cap(plateTop, bossBottoms, 'up', FaceTag.Cap);
+  // Bovenkant van de plaat: volledig vlak, met een gat per reliëfvorm (boss) die rechtstreeks op de plaat staat.
+  const { outers, holes } = reliefRegion;
+  const { holesOf, parentHole } = nestBosses(outers, holes);
+  const bossBottoms = outers.map((r) => mb.ringLevel(r, topZ));
+  mb.cap(
+    plateTop,
+    bossBottoms.filter((_, i) => parentHole[i] < 0),
+    'up',
+    FaceTag.Cap,
+  );
 
-  const groups = groupHolesToOuters(reliefRegion.outers, reliefRegion.holes);
-  groups.forEach((group, gi) => {
-    const outerBottom = bossBottoms[gi];
-    const outerTop = mb.ringLevel(group.outer, reliefTopZ);
-    mb.wall(outerBottom, outerTop, 'out', FaceTag.Outer);
-
-    const holeBottoms = group.holes.map((h) => mb.ringLevel(h, topZ));
-    const holeTops = group.holes.map((h) => mb.ringLevel(h, reliefTopZ));
-    mb.cap(outerTop, holeTops, 'up', FaceTag.Cap);
-    group.holes.forEach((_, hi) => {
+  const holeBottoms = holes.map((h) => mb.ringLevel(h, topZ));
+  const holeTops = holes.map((h) => mb.ringLevel(h, reliefTopZ));
+  outers.forEach((outer, gi) => {
+    const outerTop = mb.ringLevel(outer, reliefTopZ);
+    mb.wall(bossBottoms[gi], outerTop, 'out', FaceTag.Outer);
+    mb.cap(outerTop, holesOf[gi].map((hi) => holeTops[hi]), 'up', FaceTag.Cap);
+    for (const hi of holesOf[gi]) {
       mb.wall(holeBottoms[hi], holeTops[hi], 'in', FaceTag.Inner);
-      // Vlak "eiland" op plaathoogte binnen het gat van deze boss (bv. de kern van de contourring).
-      mb.cap(holeBottoms[hi], [], 'up', FaceTag.Cap);
-    });
+      // Vlak "eiland" op plaathoogte binnen het gat van deze boss (bv. de kern van de contourring),
+      // met op zijn beurt een gat voor elke boss die in dat gat staat (bv. nerven).
+      const nested = outers.map((_, oi) => oi).filter((oi) => parentHole[oi] === hi);
+      mb.cap(holeBottoms[hi], nested.map((oi) => bossBottoms[oi]), 'up', FaceTag.Cap);
+    }
   });
 
   return mb.build();

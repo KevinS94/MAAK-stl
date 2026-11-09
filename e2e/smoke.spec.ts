@@ -109,3 +109,53 @@ test('voorbeeldbestanden laden via de juiste basis-URL', async ({ page }) => {
   await page.getByRole('button', { name: 'Start' }).click();
   await expect(page.getByText(/Model klaar/)).toBeVisible({ timeout: 20_000 });
 });
+
+test('Canva-blad met getekende rand en nerven: selecteren, Stempel en Cutter & Stempel', async ({ page }, info) => {
+  const consoleErrors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
+  page.on('pageerror', (e) => consoleErrors.push(e.message));
+
+  await page.goto('./');
+  await page.getByRole('tab', { name: 'Stempel', exact: true }).click();
+  await page.getByTestId('file-input').setInputFiles(path.resolve('tests/fixtures/canva-blad.svg'));
+
+  // Geen importfout: de selector toont de rand (buitencontour) en de nerven (detail).
+  await expect(page.getByRole('img', { name: /Alle vormen en lijnen/ })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByText(/vorm ≈ 71 × 81 mm/)).toBeVisible();
+  const roles = page.getByRole('combobox', { name: /Rol van/ });
+  await expect(roles).toHaveCount(2);
+  await expect(roles.nth(0)).toHaveValue('outer');
+  await expect(roles.nth(1)).toHaveValue('detail');
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/${info.project.name}-6-canva-selector.png`, fullPage: true });
+
+  // Aanklikken van de nerven in de preview wisselt hun rol (detail -> negeren -> buitencontour -> detail).
+  const veins = page.locator('.path-selector__svg path[data-role="detail"]');
+  await veins.click();
+  await expect(roles.nth(1)).toHaveValue('ignore');
+  await roles.nth(1).selectOption('detail');
+
+  await page.getByRole('button', { name: 'Start' }).click();
+  await expect(page.getByText(/Model klaar/)).toBeVisible({ timeout: 30_000 });
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/${info.project.name}-7-canva-stamp.png`, fullPage: true });
+  const [stampDl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download STL' }).click()]);
+  expect(stampDl.suggestedFilename()).toBe('maak-stempel-canva-blad.stl');
+
+  await page.getByRole('tab', { name: 'Cutter & Stempel' }).click();
+  await page.getByRole('button', { name: 'Start' }).click();
+  await expect(page.getByText(/Model klaar/)).toBeVisible({ timeout: 30_000 });
+  const buttons = page.getByRole('button', { name: /Download STL/ });
+  await expect(buttons).toHaveCount(2);
+  for (let i = 0; i < 2; i++) {
+    const [dl] = await Promise.all([page.waitForEvent('download'), buttons.nth(i).click()]);
+    const bytes = readFileSync(await dl.path());
+    const count = bytes.readUInt32LE(80);
+    expect(count).toBeGreaterThan(1000);
+    expect(bytes.length).toBe(84 + 50 * count);
+  }
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/${info.project.name}-8-canva-combo.png`, fullPage: true });
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+  expect(consoleErrors).toEqual([]);
+});

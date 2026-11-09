@@ -222,6 +222,26 @@ function clipRefId(el: Element): string | null | undefined {
  */
 function rewriteClipPaths(doc: Document, notices: Set<string>): void {
   const holders = allElements(doc.documentElement).filter((el) => clipRefId(el) !== undefined);
+  // Clipping die niet exact als polygonbewerking verwerkt kan worden: duidelijk
+  // melden in plaats van stil te negeren (anders klopt de geometrie niet).
+  for (const el of holders) {
+    if (clipRefId(el) === null) {
+      fail(
+        'SVG_UNSUPPORTED',
+        'Deze SVG gebruikt een clip-path met een CSS-vorm (bv. circle() of inset()); dat wordt nog niet ondersteund. Gebruik een clipPath-element of exporteer opnieuw.',
+      );
+    }
+    let p: Element | null = el;
+    while (p) {
+      if (lname(p) === 'clippath') {
+        fail(
+          'SVG_UNSUPPORTED',
+          'Deze SVG gebruikt een clip-path binnen een clipPath-definitie; die combinatie kan niet exact verwerkt worden. Vereenvoudig de clipping of exporteer opnieuw.',
+        );
+      }
+      p = p.parentElement;
+    }
+  }
   let counter = 0;
   for (const el of holders) {
     const id = clipRefId(el);

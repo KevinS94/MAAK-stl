@@ -212,28 +212,57 @@ export interface ComboGenerationResult {
 /** Rol die de gebruiker aan één geselecteerd vectorpad toekent. */
 export type PathRole = 'outer' | 'detail' | 'ignore';
 
-/** Eén selecteerbaar vectorpad (subpad) uit de SVG, met een gesampelde polylijn in mm. */
+/**
+ * Eén selecteerbaar onderdeel van de SVG (stap B), in mm, nog NIET
+ * gecentreerd (zelfde kadertransformatie als de contour).
+ *
+ * - `region`: zichtbaar gevuld gebied, NA het toepassen van alle
+ *   clipPaths. Bij de standaardgroepering is dit een "logische vorm": de
+ *   samenhangende zichtbare stukken van één kleur (en geometrie die
+ *   daaronder volledig verborgen ligt) samen. Een getekende dikke rand is
+ *   hier een band met een gat.
+ * - `line`: een omlijning zonder vulling (open of gesloten polylijn).
+ */
 export interface SvgPathCandidate {
-  /** Stabiele id binnen één SVG-bestand, bv. "2:0". */
+  /** Stabiele id binnen één SVG-bestand, bv. "s0" (vorm) of "e3.1" (onderdeel). */
   id: string;
-  shapeIndex: number;
+  kind: 'region' | 'line';
+  /** Id's van de afzonderlijke zichtbare stukken (granulariteit "elements") in dit onderdeel. */
+  memberIds: string[];
+  /** Indices (tekenvolgorde) van de SVG-elementen waaruit dit onderdeel opgebouwd is. */
+  elementIndices: number[];
+  /** Eerste/belangrijkste elementnaam (voor de lijst). */
   elementName: string;
-  /** Had het element een vulling in de SVG (hint voor automatische roltoewijzing). */
+  /** Gevuld gebied (`region`) of enkel een omlijning (`line`). */
   filled: boolean;
-  /** Expliciet gesloten (Z) of begin/eind liggen praktisch op elkaar. */
+  /** Gesloten: altijd bij `region`; bij `line` als het pad gesloten is. */
   closed: boolean;
-  /** Gesampelde polylijn in mm, nog NIET gecentreerd (zelfde kadertransformatie als de contour). */
+  /** `line`: de polylijn. `region`: de buitenrand van het grootste eiland. */
   ring: Point2[];
+  /** Enkel bij `region`: het volledige zichtbare gebied (eilanden met gaten). */
+  region?: { outers: Ring[]; holes: Ring[] };
+  /** Netto zichtbare oppervlakte (mm²); 0 voor open lijnen. */
   areaMm2: number;
+  /** Oppervlakte binnen de buitenrand(en), gaten opgevuld (mm²). */
+  silhouetteAreaMm2: number;
   lengthMm: number;
   bounds: Bounds2;
+  /** Kleur in de SVG (genormaliseerd), informatief. */
+  paint: string;
   suggestedRole: PathRole;
 }
 
-/** Eén detaillijn, uitgelijnd met de gekozen buitencontour (mm, gecentreerd). */
+/**
+ * Eén stempeldetail, uitgelijnd met de gekozen buitencontour (mm, gecentreerd).
+ * - Zonder `region`: een lijn (open of gesloten) die met de ingestelde
+ *   detailbreedte tot een band wordt verbreed.
+ * - Met `region`: een reeds gevulde vorm/band uit de SVG; die wordt exact
+ *   zo gebruikt (NIET opnieuw verbreed), zodat de getekende breedte blijft.
+ */
 export interface DetailLine {
   ring: Point2[];
   closed: boolean;
+  region?: { outers: Ring[]; holes: Ring[] };
 }
 
 /** Resultaat van de padselectie: gekozen buitencontour + bijpassende details. */
