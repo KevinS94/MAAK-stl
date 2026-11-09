@@ -11,11 +11,11 @@ import { classifyPaths, intersectPaths, toClipperFillRule, unionPaths } from './
 import { createFrameMapping, type FrameMapping } from './svgScaling';
 import type { FrameSizeMm, Point2, Result, Ring, SVGGeometry, SVGShape, SVGSubPath, ValidatedContour } from './types';
 
-interface SampleBudget {
+export interface SampleBudget {
   points: number;
 }
 
-function sampleSubPath(sp: SVGSubPath, mapping: FrameMapping, budget: SampleBudget): { ring: Ring; gapMm: number } {
+export function sampleSubPath(sp: SVGSubPath, mapping: FrameMapping, budget: SampleBudget): { ring: Ring; gapMm: number } {
   const scale = Math.max(mapping.sx, mapping.sy);
   const pts: Point2[] = [];
   for (const curve of sp.curves) {
@@ -122,10 +122,30 @@ export function buildContourOrThrow(geometry: SVGGeometry, frameSize: FrameSizeM
     notices.add('Openingen binnenin de vorm worden genegeerd: enkel de buitencontour wordt gebruikt.');
   }
 
+  return finalizeOuterRing(islands[0], frameSize, [...notices]);
+}
+
+export function buildContour(geometry: SVGGeometry, frameSize: FrameSizeMm): Result<ValidatedContour> {
+  return toResult(() => buildContourOrThrow(geometry, frameSize));
+}
+
+/**
+ * Laatste stap van de contourverwerking, herbruikbaar voor zowel de
+ * automatische (enkele contour) als de rolgebaseerde padselectie (meerdere
+ * vectorpaden): vereenvoudigen, opschonen, zelfsnijding controleren en
+ * centreren rond (0, 0).
+ */
+export function finalizeOuterRing(candidate: Ring, frameSize: FrameSizeMm, notices: string[] = []): ValidatedContour {
+  const cleaned0 = classifyPaths(unionPaths([candidate])).outers;
+  if (cleaned0.length === 0) fail('SVG_EMPTY', 'De gekozen buitencontour is leeg of ongeldig.');
+  if (cleaned0.length > 1) {
+    fail('SVG_UNSUPPORTED', 'De gekozen buitencontour snijdt zichzelf en splitst in meerdere delen.');
+  }
+
   // Vereenvoudigen en opnieuw opschonen, zodat de contour gegarandeerd eenvoudig is.
-  const simplified = simplifyPathD(islands[0], GEOMETRY.simplifyToleranceMm, true);
+  const simplified = simplifyPathD(cleaned0[0], GEOMETRY.simplifyToleranceMm, true);
   const cleaned = classifyPaths(unionPaths([simplified])).outers;
-  let outer = cleaned.length > 0 ? cleaned[0] : islands[0];
+  let outer = cleaned.length > 0 ? cleaned[0] : cleaned0[0];
   outer = ensureCCW(removeNearDuplicates(outer, GEOMETRY.minPointDistanceMm));
   if (outer.length < 3 || ringSelfIntersects(outer)) {
     fail('SVG_UNSUPPORTED', 'De contour van deze vorm kon niet betrouwbaar bepaald worden.');
@@ -142,10 +162,6 @@ export function buildContourOrThrow(geometry: SVGGeometry, frameSize: FrameSizeM
     areaMm2: signedArea(centered),
     frameMm: { ...frameSize },
     centerOffset,
-    notices: [...notices],
+    notices,
   };
-}
-
-export function buildContour(geometry: SVGGeometry, frameSize: FrameSizeMm): Result<ValidatedContour> {
-  return toResult(() => buildContourOrThrow(geometry, frameSize));
 }

@@ -76,3 +76,58 @@ export function offsetRing(ring: Ring, delta: number): RegionRings {
   );
   return classifyPaths(out);
 }
+
+/**
+ * "Opblazen" van een open lijn tot een band van breedte `2 * halfWidth`,
+ * met afgeronde eindpunten. Gebruikt voor open stempeldetails (ribben).
+ */
+export function offsetOpenPolyline(points: readonly Point2[], halfWidth: number): RegionRings {
+  const out = inflatePathsD(
+    toPaths([points]),
+    halfWidth,
+    JoinType.Round,
+    EndType.Round,
+    2,
+    PRECISION,
+    GEOMETRY.arcToleranceMm,
+  );
+  return classifyPaths(out);
+}
+
+/**
+ * "Opblazen" van een gesloten lijn (omtrek, geen vulling) tot een gesloten
+ * band van breedte `2 * halfWidth`. Levert een annulus (buitenring + gat)
+ * op. Gebruikt voor gesloten stempeldetails en de verhoogde contourlijn.
+ */
+export function offsetClosedPolyline(points: readonly Point2[], halfWidth: number): RegionRings {
+  const out = inflatePathsD(
+    toPaths([points]),
+    halfWidth,
+    JoinType.Round,
+    EndType.Joined,
+    2,
+    PRECISION,
+    GEOMETRY.arcToleranceMm,
+  );
+  return classifyPaths(out);
+}
+
+/** Vereniging van ringen met gaten (bv. om details + contourreliëf samen te voegen). */
+export function unionRegions(regions: readonly RegionRings[], fillRule: FillRule = FillRule.NonZero): RegionRings {
+  const all = regions.flatMap((r) => [...r.outers, ...r.holes]);
+  return classifyPaths(unionPaths(all, fillRule));
+}
+
+/** Doorsnede van een regio (outers + holes) met een enkele begrenzende ring. */
+export function intersectRegionWithRing(region: RegionRings, clipRing: Ring): RegionRings {
+  const subject = toPaths([...region.outers, ...region.holes]);
+  const out = intersectPaths(subject, toPaths([clipRing]));
+  return classifyPaths(out);
+}
+
+/** Som van de absolute oppervlaktes van een regio (outers minus holes, correct bij geneste eilanden). */
+export function regionArea(region: RegionRings): number {
+  const outerArea = region.outers.reduce((s, r) => s + Math.abs(signedArea(r)), 0);
+  const holeArea = region.holes.reduce((s, r) => s + Math.abs(signedArea(r)), 0);
+  return outerArea - holeArea;
+}

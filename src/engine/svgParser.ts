@@ -7,7 +7,7 @@ import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader.js';
 import type { ShapePath } from 'three';
 import { fail, toResult } from './errors';
 import { CLIP_GEOMETRY_ATTR, CLIP_TARGET_ATTR, sanitizeSvg } from './svgValidation';
-import type { Result, SVGGeometry, SVGShape, SVGSubPath } from './types';
+import type { Result, SVGFrame, SVGGeometry, SVGShape, SVGSubPath } from './types';
 
 interface LoaderStyle {
   fill?: string;
@@ -113,4 +113,63 @@ export function parseSvgOrThrow(text: string): SVGGeometry {
 
 export function parseSvg(text: string): Result<SVGGeometry> {
   return toResult(() => parseSvgOrThrow(text));
+}
+
+/** Eén rol-neutraal vectorpad (subpad), vóór roltoewijzing door de gebruiker. */
+export interface SvgRawPath {
+  subPath: SVGSubPath;
+  fillRule: SVGShape['fillRule'];
+  /** Had het element een vulling in de SVG (hint voor automatische roltoewijzing). */
+  filled: boolean;
+  shapeIndex: number;
+  elementName: string;
+}
+
+export interface SvgRawGeometry {
+  frame: SVGFrame;
+  paths: SvgRawPath[];
+  notices: string[];
+}
+
+/**
+ * Leest de SVG net als `parseSvgOrThrow`, maar verwerpt vormen NOOIT op
+ * basis van "geen vulling" of "meerdere losse vormen": elk subpad (open of
+ * gesloten, gevuld of enkel omlijnd) wordt behouden als een afzonderlijk
+ * selecteerbaar vectorpad. Gebruikt door de universele SVG-selector
+ * (meerdere paden + open detaillijnen); de eenvoudige, automatische keten
+ * (`parseSvgOrThrow`) blijft ongewijzigd voor ondubbelzinnige SVG's.
+ */
+export function parseSvgPathsOrThrow(text: string): SvgRawGeometry {
+  const sanitized = sanitizeSvg(text);
+  const notices = new Set(sanitized.notices);
+
+  let data: { paths: ShapePath[] };
+  const originalWarn = console.warn;
+  try {
+    console.warn = () => undefined;
+    data = new SVGLoader().parse(sanitized.text);
+  } catch (err) {
+    return fail('SVG_PARSE', 'Deze SVG kon niet gelezen worden.', err instanceof Error ? err.message : String(err));
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const paths: SvgRawPath[] = [];
+  data.paths.forEach((shapePath, shapeIndex) => {
+    const userData = (shapePath.userData ?? {}) as { node?: Element; style?: LoaderStyle };
+    const node = userData.node;
+    const style = userData.style ?? {};
+    const elementName = node ? (node.localName || node.nodeName).toLowerCase() : 'path';
+    if (style.visibility === 'hidden' || style.opacity === 0) return;
+    const fillRule = style.fillRule === 'evenodd' ? 'evenodd' : 'nonzero';
+    const filled = elementName !== 'line' && isPainted(style.fill) && style.fillOpacity !== 0;
+    const stroked = isPainted(style.stroke) && (style.strokeWidth ?? 1) > 0 && style.strokeOpacity !== 0;
+    if (!filled && !stroked) return;
+    for (const subPath of toSubPaths(shapePath)) {
+      paths.push({ subPath, fillRule, filled, shapeIndex, elementName });
+    }
+  });
+
+  if (paths.length === 0) fail('SVG_EMPTY', 'Er werd geen bruikbaar vectorpad gevonden in deze SVG.');
+  return { frame: sanitized.frame, paths, notices: [...notices] };
 }

@@ -1,22 +1,13 @@
-import type { ParameterLimits } from '../config/defaults';
 import { fail } from '../engine/errors';
 import { ringStrictlyInside } from '../engine/geometry2d';
 import { offsetRing } from '../engine/polygonOffset';
-import type { Ring, ShapeParameters } from '../engine/types';
+import type { ParamSpec, Ring, ShapeParameters } from '../engine/types';
 
-const LABELS: Record<keyof ShapeParameters, string> = {
-  length: 'Lengte',
-  width: 'Breedte',
-  height: 'Hoogte',
-  wallThickness: 'Wanddikte',
-};
-
-export function assertParameters(params: ShapeParameters, limits: ParameterLimits): void {
-  for (const key of Object.keys(LABELS) as (keyof ShapeParameters)[]) {
-    const v = params[key];
-    const { min, max } = limits[key];
-    if (!Number.isFinite(v) || v < min || v > max) {
-      fail('INVALID_PARAMETERS', `${LABELS[key]} moet tussen ${min} en ${max} mm liggen.`);
+export function assertParameters(params: ShapeParameters, specs: ParamSpec[]): void {
+  for (const spec of specs) {
+    const v = params[spec.key];
+    if (!Number.isFinite(v) || v < spec.min || v > spec.max) {
+      fail('INVALID_PARAMETERS', `${spec.label} moet tussen ${spec.min} en ${spec.max} mm liggen.`);
     }
   }
 }

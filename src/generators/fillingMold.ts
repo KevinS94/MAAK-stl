@@ -7,7 +7,7 @@
  *   Z = b     │ └─────────┘ │   b = bodemdikte
  *   Z = 0     └─────────────┘
  */
-import { FILLING_MOLD_DEFAULTS, FILLING_MOLD_INTERNAL, FILLING_MOLD_LIMITS } from '../config/defaults';
+import { FILLING_MOLD_DEFAULTS, FILLING_MOLD_INTERNAL, FILLING_MOLD_PARAMS } from '../config/defaults';
 import { fail, toResult } from '../engine/errors';
 import { MeshBuilder } from '../engine/meshGeneration';
 import { FaceTag, type MeshData, type ShapeParameters, type ValidatedContour } from '../engine/types';
@@ -24,7 +24,7 @@ export function buildFillingMold(
   params: ShapeParameters,
   opts: FillingMoldOptions = FILLING_MOLD_INTERNAL,
 ): MeshData {
-  assertParameters(params, FILLING_MOLD_LIMITS);
+  assertParameters(params, FILLING_MOLD_PARAMS);
   const H = params.height;
   const b = opts.floorThickness;
   if (!(H > b + opts.minCavityDepth - 1e-9)) {
@@ -55,10 +55,12 @@ export function buildFillingMold(
 
 export const fillingMoldGenerator: ShapeGenerator = {
   id: 'fillingMold',
+  kind: 'single',
   label: 'Vulvorm',
   title: 'Vulvorm',
   description: 'Een hol bakje in de vorm van je ontwerp, met een bodem en opstaande wanden.',
   defaults: FILLING_MOLD_DEFAULTS,
-  limits: FILLING_MOLD_LIMITS,
-  generate: (contour, params) => toResult(() => buildFillingMold(contour, params)),
+  params: FILLING_MOLD_PARAMS,
+  usesDetails: false,
+  generate: (contour, _details, params) => toResult(() => buildFillingMold(contour, params)),
 };

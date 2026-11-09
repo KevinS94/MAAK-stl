@@ -4,20 +4,30 @@
  */
 import type { Curve, Vector2 } from 'three';
 
-export type GeneratorType = 'cookieCutter' | 'fillingMold';
+export type GeneratorType = 'cookieCutter' | 'fillingMold' | 'stamp' | 'cutterStamp';
 
 export type ApplicationMode = 'basis' | 'expert';
 
-/** De vier parameters uit Expertmodus (alle waarden in mm). */
-export interface ShapeParameters {
-  /** Afmeting van het volledige SVG-kader in X-richting (mm). */
-  length: number;
-  /** Afmeting van het volledige SVG-kader in Y-richting (mm). */
-  width: number;
-  /** Totale hoogte van het object (mm). */
-  height: number;
-  /** Wanddikte (mm). */
-  wallThickness: number;
+/**
+ * Parameterwaarden van een generator (alle waarden in mm). Elke generator
+ * bepaalt zelf welke sleutels relevant zijn via zijn `ParamSpec[]`
+ * (zie `generators/types.ts`); hier blijft dit een open record zodat
+ * cookie cutter/vulvorm (lengte, breedte, hoogte, wanddikte) en de nieuwe
+ * stempelgeneratoren (andere sleutels) dezelfde machinerie kunnen delen.
+ */
+export type ShapeParameters = Record<string, number>;
+
+/** Eén instelbare parameter: grenzen, standaardwaarde en Nederlands label. */
+export interface ParamSpec {
+  key: string;
+  label: string;
+  hint: string;
+  min: number;
+  max: number;
+  step: number;
+  default: number;
+  /** Optioneel groepslabel (bv. "Cookie cutter" / "Stempel" bij Cutter & Stempel). */
+  group?: string;
 }
 
 export interface Point2 {
@@ -160,7 +170,12 @@ export type GeometryErrorCode =
   | 'SHAPE_TOO_NARROW'
   | 'FLARE_INVALID'
   | 'TRIANGULATION_FAILED'
-  | 'MESH_INVALID';
+  | 'MESH_INVALID'
+  | 'NO_OUTER_SELECTED'
+  | 'CONTOUR_RELIEF_INVALID'
+  | 'DETAIL_INVALID'
+  | 'HANDLE_INVALID'
+  | 'STAMP_FIT_INVALID';
 
 /** Gestructureerde fout met een korte Nederlandse melding. */
 export interface GeometryValidationError {
@@ -178,4 +193,54 @@ export interface GenerationResult {
   report: MeshReport;
   contour: ValidatedContour;
   notices: string[];
+}
+
+/** Resultaat van Cutter & Stempel: twee onafhankelijke, gevalideerde modellen. */
+export interface ComboGenerationResult {
+  generator: GeneratorType;
+  parameters: ShapeParameters;
+  cutter: { mesh: MeshData; report: MeshReport };
+  stamp: { mesh: MeshData; report: MeshReport };
+  contour: ValidatedContour;
+  notices: string[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Universele SVG-padselectie (meerdere vectorpaden + open lijnen)    */
+/* ------------------------------------------------------------------ */
+
+/** Rol die de gebruiker aan één geselecteerd vectorpad toekent. */
+export type PathRole = 'outer' | 'detail' | 'ignore';
+
+/** Eén selecteerbaar vectorpad (subpad) uit de SVG, met een gesampelde polylijn in mm. */
+export interface SvgPathCandidate {
+  /** Stabiele id binnen één SVG-bestand, bv. "2:0". */
+  id: string;
+  shapeIndex: number;
+  elementName: string;
+  /** Had het element een vulling in de SVG (hint voor automatische roltoewijzing). */
+  filled: boolean;
+  /** Expliciet gesloten (Z) of begin/eind liggen praktisch op elkaar. */
+  closed: boolean;
+  /** Gesampelde polylijn in mm, nog NIET gecentreerd (zelfde kadertransformatie als de contour). */
+  ring: Point2[];
+  areaMm2: number;
+  lengthMm: number;
+  bounds: Bounds2;
+  suggestedRole: PathRole;
+}
+
+/** Eén detaillijn, uitgelijnd met de gekozen buitencontour (mm, gecentreerd). */
+export interface DetailLine {
+  ring: Point2[];
+  closed: boolean;
+}
+
+/** Resultaat van de padselectie: gekozen buitencontour + bijpassende details. */
+export interface PathSelection {
+  candidates: SvgPathCandidate[];
+  /** candidate.id -> rol. */
+  roles: Record<string, PathRole>;
+  /** Of de selectie automatisch en ondubbelzinnig bepaald kon worden. */
+  unambiguous: boolean;
 }
