@@ -171,7 +171,22 @@ Na het schalen wordt de vorm in het XY-vlak rond (0, 0) gecentreerd; de afmeting
 2. **Selectie** (`svgPaths.ts`): de zichtbare geometrie wordt gegroepeerd tot *logische vormen* — overlappende stukken van dezelfde kleur horen samen, en geometrie die bijna volledig onder later getekende geometrie ligt, hoort bij de vorm die ze bedekt. Zo is een Canva-rand die uit acht geclipte stukken bestaat één klikbare vorm. Elke vorm krijgt een voorgestelde rol (buitencontour · stempeldetail · negeren), die je in de preview (klikken) of in de lijst kunt wijzigen. Met *Toon afzonderlijke onderdelen* kies je per stuk.
 3. **Validatie** (pas na de keuze): de gekozen buitencontour-onderdelen worden verenigd en hun binnenruimte wordt opgevuld — een dikke getekende rand wordt zo de volle vorm, zonder ongewenste uitsparing. Pas dan wordt gecontroleerd dat dit één samenhangende, gesloten vorm is.
 
-**Details.** Lijnen (strokes) worden een band van exact de ingestelde *Dikte details*. Gevulde vormen/banden (zoals Canva-nerven) worden op hun getekende breedte gebruikt en niet nogmaals verbreed.
+**Gesloten vorm of middellijn.** Naast de rol heeft elk gekozen pad een *interpretatie*, die je in de lijst van de selector wijzigt:
+
+| Interpretatie | Buitencontour | Stempeldetail |
+| --- | --- | --- |
+| **Gesloten vorm** | het gevulde/omsloten gebied (een getekende rand wordt de volle vorm) | het gevulde gebied op zijn getekende breedte |
+| **Middellijn** | een gesloten band van *Vormdikte* rond de middellijn | een band van *Dikte details* rond de middellijn |
+
+Voorstellen: een open lijn → altijd *Middellijn* (een open lijn heeft geen binnenkant); een smalle gevulde band (omtrek² / 4·oppervlakte ≥ 8 en gemiddelde breedte ≤ 6 % van het kader, bv. een Canva-penseellijn, een kalligrafische letter of een nerf) → *Middellijn*, behalve een getekende rand met binnenruimte als buitencontour; een gesloten lijn → *Gesloten vorm* als buitencontour en *Middellijn* als detail; andere gevulde vormen → *Gesloten vorm*. Bevat de SVG geen bruikbare gesloten vorm, dan wordt de langste open lijn de buitencontour. Zo werkt een open letter "S" meteen.
+
+Van een **gevulde** band wordt eerst de middellijn bepaald (`centerline.ts`): rasteren op ± 10 pixels over de bandbreedte → dunnen tot een skelet (Zhang–Suen) → graaf met eindpunten, vertakkingen en lussen → korte randruis-takjes snoeien → gladmaken → elk punt subpixelnauwkeurig tussen de echte polygoonranden centreren → vrije uiteinden verlengen tot een halve lokale breedte van de tip. Vertakkingen (nerven) en lussen blijven behouden. Daarna maakt Clipper2 er een band van met afgeronde uiteinden en verbindingen; overlappende delen worden verenigd. Waar de middellijn een lus vormt of zichzelf kruist, wordt de ingesloten ruimte opgevuld (melding). De band is daarna een gewone gesloten buitenvorm: de wanddiktecontrole van cookie cutter, vulvorm en Cutter & Stempel gebeurt pas op de band, met een melding die naar de vormdikte verwijst als hij te smal is.
+
+**Vormdikte** (Expertmodus, enkel zichtbaar wanneer de buitencontour een middellijn is; 1–40 mm): 8 mm voor cookie cutter en vulvorm. Voor Stempel (24 mm) en Cutter & Stempel (27 mm) is de standaard breder, omdat het handvat (standaard 20 mm, met 1,5 mm veiligheidsmarge) op de plaat moet passen; past het niet, dan noemt de melding de benodigde vormdikte.
+
+**Details.** Lijnen (strokes) en middellijnen worden een band van exact de ingestelde *Dikte details*; smalle gevulde banden (zoals Canva-nerven) dus ook, standaard. Kies *Gesloten vorm* om een gevuld detail op zijn getekende breedte te houden.
+
+**Stempelreliëf.** *Hoogte contour* (standaard 1,5 mm, minimum 0) en *Hoogte details* (standaard 1,5 mm) zijn onafhankelijk instelbaar in Expertmodus, voor Stempel en Cutter & Stempel (gedeelde stempelgeometrie). Bij hoogte contour 0 mm wordt er geen verhoogde contourlijn gemaakt en is *Dikte contour* uitgeschakeld; plaat, details en handvat blijven ongewijzigd. Reliëfeilanden van één soort staan exact op hun eigen hoogte. Waar contour en details elkaar raken met een verschillende hoogte, staat dat eiland op de laagste hoogte en krijgt het hogere deel een terras dat 0,05 mm binnen de rand blijft, zodat er nooit samenvallende wanden of gedegenereerde driehoeken ontstaan.
 
 **Curves** worden adaptief omgezet naar polygonen: maximaal 0,25 mm per lijnstukje op de uiteindelijke afmeting (min. 4, max. 720 per curve). Bij een cirkel van 70 mm is de afwijking kleiner dan 0,01 mm.
 
@@ -193,7 +208,8 @@ Na het schalen wordt de vorm in het XY-vlak rond (0, 0) gecentreerd; de afmeting
    `svgPaths.ts` — clipping exact toepassen, groeperen tot logische vormen, rollen voorstellen (stap B) en de gekozen buitencontour valideren (stap C).
 3. `svgScaling.ts` — SVG-eenheden → millimeter volgens het referentiekader.
 4. `contourProcessing.ts` — discretiseren, vulregels, clip-paths, union, achtergrond herkennen, vereenvoudigen, controleren op zelfdoorsnijding, centreren.
-5. `polygonOffset.ts` — offsets via Clipper2 met afgeronde hoeken (overal exact dezelfde afstand).
+5. `polygonOffset.ts` — offsets via Clipper2 met afgeronde hoeken (overal exact dezelfde afstand); elke uitvoer wordt ontdaan van collineaire punten op Clipper-precisie (0,1 µm), wat de triangulatie van geneste offsets robuust maakt.
+   `centerline.ts` — middellijn van gevulde banden en bandvorming rond middellijnen.
 6. `triangulation.ts` — triangulatie met controle op oppervlak, gedegenereerde driehoeken en T-verbindingen.
 7. `meshGeneration.ts` — gesloten meshes uit verticale wanden en horizontale vlakken met gedeelde vertices.
 8. `meshValidation.ts` — controle zoals een slicer: geslotenheid, manifold, oriëntatie, samenhang, volume.
@@ -217,6 +233,9 @@ Een model wordt pas getoond én is pas downloadbaar nadat de mesh-validatie gesl
 - CSS die vormen verbergt via een `<style>`-klasse met `display: none` wordt niet herkend; `display="none"` als attribuut of inline stijl wel.
 - Inkepingen die zo smal zijn dat de 2 mm-drukrand een volledig ingesloten holte zou vormen, geven een foutmelding. Smalle spleten die gewoon overbrugd worden, zijn toegestaan.
 - Delen van de vorm die smaller zijn dan twee keer de wanddikte worden massief (de binnenwand trekt zich terug). Wordt de binnenruimte volledig nul, dan volgt een foutmelding.
+- **Middellijnen** van gevulde vormen worden via een raster bepaald (nauwkeurigheid na subpixelcorrectie ± 0,05 mm op rechte stukken; bij sterk variërende breedte of scherpe knikken kan de middellijn lokaal tot ± 0,25 mm afwijken). Haarfijne (< 0,05 mm) of zeer vertakte vormen (> 1500 takken) worden geweigerd met de melding "te smal of te complex"; kies dan *Gesloten vorm*.
+- Een middellijn-buitencontour moet één samenhangend geheel opleveren: een "i" met een los puntje geeft de gewone melding over losse delen. Lussen in de middellijn worden opgevuld (geen uitsparing), zoals bij elke buitencontour.
+- Bij een brede vormdikte kunnen nauwe inkepingen tussen twee delen van de band ontstaan, die de drukrand van de cookie cutter dichtdrukt (melding). Het handvat van een stempel is een cilinder: op een smalle band moet de vormdikte minstens diameter + 3 mm zijn (bij Cutter & Stempel + 2 × (wanddikte + speling)).
 - De berekening gebeurt op de hoofdthread. Voor gewone vormen duurt dat 5–300 ms; zeer gedetailleerde vormen kunnen de pagina kort laten haperen.
 - De JavaScript-bundel is ongeveer 270 kB gzip, vooral door Three.js.
 
@@ -235,7 +254,7 @@ Een model wordt pas getoond én is pas downloadbaar nadat de mesh-validatie gesl
 │   │                          DownloadButton, HelpDialog
 │   ├── generators/            types.ts, shared.ts, cookieCutter.ts,
 │   │                          fillingMold.ts, index.ts (register)
-│   ├── engine/                types.ts, errors.ts, geometry2d.ts, svgValidation.ts,
+│   ├── engine/                types.ts, errors.ts, geometry2d.ts, svgValidation.ts, centerline.ts,
 │   │                          svgParser.ts, svgScaling.ts, contourProcessing.ts,
 │   │                          polygonOffset.ts, triangulation.ts, meshGeneration.ts,
 │   │                          meshValidation.ts, stlExporter.ts, pipeline.ts

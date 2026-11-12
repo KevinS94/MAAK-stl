@@ -110,6 +110,110 @@ export const SVG = {
   thinStrip: wrap('<rect x="5" y="42" width="90" height="16"/>'),
 };
 
+/* ------------------------------------------------------------------ */
+/* Open lettervormen (middellijn)                                      */
+/* ------------------------------------------------------------------ */
+
+type P2 = { x: number; y: number };
+const cubic = (a: P2, b: P2, c: P2, d: P2, t: number): P2 => {
+  const u = 1 - t;
+  return {
+    x: u * u * u * a.x + 3 * u * u * t * b.x + 3 * u * t * t * c.x + t * t * t * d.x,
+    y: u * u * u * a.y + 3 * u * u * t * b.y + 3 * u * t * t * c.y + t * t * t * d.y,
+  };
+};
+
+/** Middellijn van een "S" in SVG-eenheden (viewBox 100 × 100, y naar beneden), als drie kubische Béziers. */
+export const S_SEGMENTS: [P2, P2, P2, P2][] = [
+  [{ x: 72, y: 24 }, { x: 66, y: 12 }, { x: 34, y: 12 }, { x: 32, y: 30 }],
+  [{ x: 32, y: 30 }, { x: 30, y: 46 }, { x: 70, y: 50 }, { x: 68, y: 68 }],
+  [{ x: 68, y: 68 }, { x: 66, y: 86 }, { x: 34, y: 88 }, { x: 28, y: 76 }],
+];
+const S_PATH = 'M72 24 C66 12, 34 12, 32 30 C30 46, 70 50, 68 68 C66 86, 34 88, 28 76';
+
+/** Dicht bemonsterde middellijn van de "S" in mm (100 × 100-kader, y naar boven zoals in de engine). */
+export function sCenterlineMm(perSegment = 200): P2[] {
+  const out: P2[] = [];
+  S_SEGMENTS.forEach((seg, k) => {
+    for (let i = k === 0 ? 0 : 1; i <= perSegment; i++) {
+      const p = cubic(seg[0], seg[1], seg[2], seg[3], i / perSegment);
+      out.push({ x: p.x, y: 100 - p.y });
+    }
+  });
+  return out;
+}
+
+/**
+ * Gevulde band rond de "S" met een variërende halve breedte (kalligrafisch,
+ * met smallere uiteinden), als één gesloten polygoon in SVG-eenheden.
+ */
+function calligraphicS(halfWidth: (t: number) => number, scale = 1): string {
+  const pts: P2[] = [];
+  S_SEGMENTS.forEach((seg, k) => {
+    for (let i = k === 0 ? 0 : 1; i <= 120; i++) pts.push(cubic(seg[0], seg[1], seg[2], seg[3], i / 120));
+  });
+  const left: P2[] = [];
+  const right: P2[] = [];
+  pts.forEach((p, i) => {
+    const a = pts[Math.max(0, i - 1)];
+    const b = pts[Math.min(pts.length - 1, i + 1)];
+    const l = Math.hypot(b.x - a.x, b.y - a.y);
+    const nx = -(b.y - a.y) / l;
+    const ny = (b.x - a.x) / l;
+    const w = halfWidth(i / (pts.length - 1));
+    left.push({ x: p.x + nx * w, y: p.y + ny * w });
+    right.push({ x: p.x - nx * w, y: p.y - ny * w });
+  });
+  const ring = [...left, ...right.reverse()];
+  return 'M' + ring.map((p) => `${(p.x * scale).toFixed(4)} ${(p.y * scale).toFixed(4)}`).join(' L') + ' Z';
+}
+
+export const LETTERS = {
+  /** Open "S" als omlijnde lijn (geen vulling): een echte open contour. */
+  openS: wrap(`<path d="${S_PATH}" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round"/>`),
+  /**
+   * Canva-achtige export van een kalligrafische, open lettervorm "S": px-viewBox (375 × 375),
+   * witte achtergrond, clipPath en groepsmatrix; de letter zelf is een smalle GEVULDE band
+   * (2,4–4,4 mm breed, smallere uiteinden) — zo exporteert Canva penseel- en lijnvormen.
+   */
+  canvaCalligraphicS:
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="375" zoomAndPan="magnify" viewBox="0 0 375 375" height="375" preserveAspectRatio="xMidYMid meet" version="1.0">' +
+    '<defs><clipPath id="frame"><path d="M 0 0 L 375 0 L 375 375 L 0 375 Z" clip-rule="nonzero"/></clipPath></defs>' +
+    '<rect x="-37.5" width="450" fill="#ffffff" y="-37.5" height="450" fill-opacity="1"/>' +
+    `<g clip-path="url(#frame)"><g transform="matrix(3.75, 0, 0, 3.75, 0, 0)"><path fill="#0034bb" fill-rule="nonzero" d="${calligraphicS((t) => 1.2 + 1.0 * Math.sin(Math.PI * t))}"/></g></g></svg>`,
+  /** Dezelfde gevulde "S" (constante breedte 3 mm) als stempeldetail binnen een cirkel. */
+  circleWithFilledS: wrap(
+    '<circle cx="50" cy="50" r="46" fill="#2e7d32"/>' + `<path fill="#0b2e0b" d="${calligraphicS(() => 1.5)}"/>`,
+  ),
+  /** Open zigzag met scherpe bochten (hoeken van ± 37°). */
+  zigzag: wrap('<path d="M10 25 L 35 75 L 60 25 L 85 75" fill="none" stroke="#000" stroke-width="1"/>'),
+  /** Open, afgeronde boog (driekwart cirkel, r = 30). */
+  roundArc: wrap('<path d="M 20 50 A 30 30 0 1 1 50 80" fill="none" stroke="#000" stroke-width="1"/>'),
+  /** Open lijn die zichzelf kruist (strik): de lussen worden opgevuld. */
+  selfCrossing: wrap('<path d="M 15 80 L 85 20 L 85 80 L 15 20" fill="none" stroke="#000" stroke-width="1"/>'),
+  /** Haarfijne gevulde band (0,03 mm): te smal om een middellijn betrouwbaar te bepalen. */
+  hairline: wrap('<rect x="10" y="50" width="80" height="0.03" fill="#000"/>'),
+  /** Fijn raster van 24 × 24 kruisende gevulde lijntjes (0,4 mm): te complex om veilig om te zetten. */
+  hatch: wrap(
+    Array.from({ length: 24 }, (_, i) => `<rect x="10" y="${(10 + i * 3.4).toFixed(2)}" width="80" height="0.4" fill="#000"/>`).join('') +
+      Array.from({ length: 24 }, (_, i) => `<rect x="${(10 + i * 3.4).toFixed(2)}" y="10" width="0.4" height="80" fill="#000"/>`).join(''),
+  ),
+};
+
+/**
+ * Echte Canva-export van een open letter "S": twee rechte omlijnde lijnen (stroke 12, ronde
+ * uiteinden, elk met een clipPath) en een gebogen gevulde band (een groot vlak, geknipt door
+ * geneste clipPaths), allemaal in dezelfde kleur.
+ */
+export function openLetterSSvg(): string {
+  return readFileSync(path.resolve(__dirname, 'fixtures/open-letter-s.svg'), 'utf8');
+}
+
+/** Echte Canva-export van een dunne lijntekening (gevulde lijnen van ± 0,3 mm). */
+export function lineDrawingSvg(): string {
+  return readFileSync(path.resolve(__dirname, 'fixtures/lijntekening.svg'), 'utf8');
+}
+
 /** Het echte Canva-bestand (blad met getekende rand en nerven, opgebouwd met geneste clipPaths). */
 export function canvaLeafSvg(): string {
   return readFileSync(path.resolve(__dirname, 'fixtures/canva-blad.svg'), 'utf8');

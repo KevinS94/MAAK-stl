@@ -28,6 +28,17 @@ export interface ParamSpec {
   default: number;
   /** Optioneel groepslabel (bv. "Cookie cutter" / "Stempel" bij Cutter & Stempel). */
   group?: string;
+  /**
+   * Het veld wordt uitgeschakeld (maar blijft zichtbaar) wanneer een andere
+   * parameter deze waarde heeft, bv. "Dikte contour" bij "Hoogte contour" = 0.
+   */
+  disabledWhen?: { key: string; equals: number };
+  /**
+   * Het veld wordt enkel getoond (en gecontroleerd) in deze situatie:
+   * `centerlineOuter` = de gekozen buitencontour wordt als middellijn
+   * geïnterpreteerd (bv. "Vormdikte").
+   */
+  showWhen?: 'centerlineOuter';
 }
 
 export interface Point2 {
@@ -108,6 +119,8 @@ export interface ValidatedContour {
    * positie in het kader = punt in `outer` + `centerOffset`.
    */
   centerOffset: Point2;
+  /** Gezet als de buitencontour een band rond een middellijn is (vormdikte in mm). */
+  centerline?: { thicknessMm: number };
   notices: string[];
 }
 
@@ -175,7 +188,8 @@ export type GeometryErrorCode =
   | 'CONTOUR_RELIEF_INVALID'
   | 'DETAIL_INVALID'
   | 'HANDLE_INVALID'
-  | 'STAMP_FIT_INVALID';
+  | 'STAMP_FIT_INVALID'
+  | 'CENTERLINE_INVALID';
 
 /** Gestructureerde fout met een korte Nederlandse melding. */
 export interface GeometryValidationError {
@@ -211,6 +225,16 @@ export interface ComboGenerationResult {
 
 /** Rol die de gebruiker aan één geselecteerd vectorpad toekent. */
 export type PathRole = 'outer' | 'detail' | 'ignore';
+
+/**
+ * Hoe een geselecteerd pad geïnterpreteerd wordt:
+ * - `shape`: als gesloten vorm (het gevulde/omsloten gebied);
+ * - `centerline`: als middellijn, waarrond een band met een instelbare
+ *   dikte gebouwd wordt (vormdikte voor de buitencontour, dikte details
+ *   voor stempeldetails). Bij een gevulde smalle band wordt eerst de
+ *   middellijn ervan bepaald.
+ */
+export type PathInterpretation = 'shape' | 'centerline';
 
 /**
  * Eén selecteerbaar onderdeel van de SVG (stap B), in mm, nog NIET
@@ -249,6 +273,10 @@ export interface SvgPathCandidate {
   bounds: Bounds2;
   /** Kleur in de SVG (genormaliseerd), informatief. */
   paint: string;
+  /** Gemiddelde getekende breedte van een gevuld gebied (2 × oppervlakte / omtrek, mm); 0 voor lijnen. */
+  bandWidthMm: number;
+  /** Gevuld gebied dat eruitziet als een smalle band (lijnvorm): voorstel "Middellijn". */
+  bandLike: boolean;
   suggestedRole: PathRole;
 }
 
@@ -270,6 +298,8 @@ export interface PathSelection {
   candidates: SvgPathCandidate[];
   /** candidate.id -> rol. */
   roles: Record<string, PathRole>;
+  /** candidate.id -> interpretatie (enkel expliciete keuzes; anders het voorstel). */
+  interpretations?: Record<string, PathInterpretation>;
   /** Of de selectie automatisch en ondubbelzinnig bepaald kon worden. */
   unambiguous: boolean;
 }

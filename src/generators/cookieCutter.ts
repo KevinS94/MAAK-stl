@@ -54,7 +54,7 @@ export function buildCookieCutter(
   const t = params.wallThickness;
   const outer = contour.outer;
 
-  const inners = innerContours(outer, t);
+  const inners = innerContours(outer, t, contour.centerline?.thicknessMm);
 
   const flareH = effectiveFlareHeight(H, opts);
   const steps = flareH > 0 && opts.flareWidth > 0 ? Math.max(4, Math.ceil(flareH / opts.flareStepHeight)) : 0;

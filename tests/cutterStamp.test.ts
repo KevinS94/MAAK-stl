@@ -16,7 +16,7 @@ describe('Cutter & Stempel', () => {
     const contour = contourOf(SVG[name]);
     const { cutter, stamp } = buildCutterAndStamp(contour, [], P);
     expectValidSolid(cutter, P.height);
-    expectValidSolid(stamp, P.handleHeight + 3 + P.reliefHeight);
+    expectValidSolid(stamp, P.handleHeight + 3 + P.contourHeight);
   });
 
   it('de stempel past binnen de binnenzijde van de cutter met de ingestelde speling', () => {
@@ -38,7 +38,7 @@ describe('Cutter & Stempel', () => {
   it('bevat stempeldetails (nerven) ook in de stempel van de combinatie', () => {
     const sel = selectionOf(SVG.leafWithVeins);
     const { stamp } = buildCutterAndStamp(sel.contour, sel.details, P);
-    expectValidSolid(stamp, P.handleHeight + 3 + P.reliefHeight);
+    expectValidSolid(stamp, P.handleHeight + 3 + P.contourHeight);
   });
 
   it('generator end-to-end geeft een ComboResult met twee gevalideerde meshes', () => {
@@ -46,7 +46,7 @@ describe('Cutter & Stempel', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expectValidSolid(r.value.cutter, P.height);
-      expectValidSolid(r.value.stamp, P.handleHeight + 3 + P.reliefHeight);
+      expectValidSolid(r.value.stamp, P.handleHeight + 3 + P.contourHeight);
     }
   });
 

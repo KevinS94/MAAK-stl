@@ -5,7 +5,7 @@ import { GeneratorTabs } from './components/GeneratorTabs';
 import { Header } from './components/Header';
 import { HelpDialog } from './components/HelpDialog';
 import { ModeToggle } from './components/ModeToggle';
-import { draftFromDefaults, ParameterPanel, type ParameterDraft } from './components/ParameterPanel';
+import { draftFromDefaults, isParamDisabled, ParameterPanel, type ParameterDraft } from './components/ParameterPanel';
 import { PathSelector } from './components/PathSelector';
 import { Preview3D } from './components/Preview3D';
 import { SVGUploader, type FileStatus } from './components/SVGUploader';
@@ -19,7 +19,9 @@ import {
   extractPathCandidates,
   hasGroupedShapes,
   importSvg,
+  transferInterpretations,
   transferRoles,
+  usesCenterlineOuter,
   type Granularity,
 } from './engine/svgPaths';
 import { frameSizeFor } from './engine/svgScaling';
@@ -31,6 +33,8 @@ import type {
   GenerationResult,
   GeneratorType,
   GeometryValidationError,
+  ParamSpec,
+  PathInterpretation,
   PathRole,
   Result,
   ShapeParameters,
@@ -51,6 +55,8 @@ interface SvgState {
   scene: SvgScene;
   granularity: Granularity;
   roles: Record<string, PathRole>;
+  /** Expliciete keuzes "Gesloten vorm" / "Middellijn"; anders geldt het voorstel. */
+  interpretations: Record<string, PathInterpretation>;
 }
 
 function initialDrafts(): Record<GeneratorType, ParameterDraft> {
@@ -62,13 +68,27 @@ function initialDrafts(): Record<GeneratorType, ParameterDraft> {
   };
 }
 
-function parseDraft(draft: ParameterDraft, generator: GeneratorType) {
+/** Situaties waarin conditionele parameters (`showWhen`) zichtbaar zijn. */
+interface ParamContext {
+  centerlineOuter: boolean;
+}
+
+function isParamShown(spec: ParamSpec, ctx: ParamContext): boolean {
+  return !spec.showWhen || ctx[spec.showWhen];
+}
+
+function parseDraft(draft: ParameterDraft, generator: GeneratorType, ctx: ParamContext) {
   const specs = PARAMS_BY_GENERATOR[generator];
   const errors: Partial<Record<string, string>> = {};
   const values: ShapeParameters = {};
   for (const spec of specs) {
     const raw = (draft[spec.key] ?? '').trim().replace(',', '.');
     const n = raw === '' ? NaN : Number(raw);
+    if (isParamDisabled(spec, draft) || !isParamShown(spec, ctx)) {
+      // Uitgeschakeld of verborgen veld: wordt niet gebruikt, mag Start dus niet blokkeren.
+      values[spec.key] = Number.isFinite(n) && n >= spec.min && n <= spec.max ? n : spec.default;
+      continue;
+    }
     if (!Number.isFinite(n)) errors[spec.key] = 'Vul een getal in.';
     else if (n < spec.min || n > spec.max) errors[spec.key] = `Kies een waarde tussen ${spec.min} en ${spec.max} mm.`;
     values[spec.key] = n;
@@ -76,9 +96,9 @@ function parseDraft(draft: ParameterDraft, generator: GeneratorType) {
   return { values, errors, valid: Object.keys(errors).length === 0 };
 }
 
-function basisSummary(gen: AnyGenerator): string {
+function basisSummary(gen: AnyGenerator, ctx: ParamContext): string {
   const extra = gen.params
-    .filter((p) => p.key !== 'length' && p.key !== 'width')
+    .filter((p) => p.key !== 'length' && p.key !== 'width' && isParamShown(p, ctx))
     .map((p) => `${p.label.toLowerCase()} ${fmtMm(p.default)} mm`)
     .join(' · ');
   return `Automatische instellingen: kader 100 × 100 mm${extra ? ' · ' + extra : ''}`;
@@ -101,16 +121,16 @@ export default function App() {
   const requestRef = useRef(0);
 
   const activeGenerator = getGenerator(generator);
-  const parsed = useMemo(() => parseDraft(drafts[generator], generator), [drafts, generator]);
-  const params: ShapeParameters = mode === 'basis' ? activeGenerator.defaults : parsed.values;
-  const paramsValid = mode === 'basis' || parsed.valid;
+  // Het kader hangt niet af van conditionele parameters; die zijn pas na de padselectie bekend.
+  const frameParsed = useMemo(() => parseDraft(drafts[generator], generator, { centerlineOuter: false }), [drafts, generator]);
+  const frameValid = mode === 'basis' || frameParsed.valid;
 
   const invalidate = useCallback(() => {
     requestRef.current++;
     setGeneration({ status: 'idle' });
   }, []);
 
-  const frame = frameSizeFor(paramsValid ? mode : 'basis', paramsValid ? params : activeGenerator.defaults);
+  const frame = frameSizeFor(frameValid ? mode : 'basis', frameValid ? frameParsed.values : activeGenerator.defaults);
   const selectionFrame = useMemo(() => ({ length: frame.length, width: frame.width }), [frame.length, frame.width]);
 
   // Stap B: alle selecteerbare vormen/lijnen op de schaal die bij Start gebruikt wordt.
@@ -120,13 +140,27 @@ export default function App() {
   );
   const candidates = candidatesResult?.ok ? candidatesResult.value : null;
 
+  // "Vormdikte" is enkel relevant als de gekozen buitencontour een middellijn is.
+  const centerlineOuter = Boolean(svg && candidates && usesCenterlineOuter(candidates, svg.roles, svg.interpretations));
+  const paramContext: ParamContext = { centerlineOuter };
+  const parsed = useMemo(
+    () => parseDraft(drafts[generator], generator, { centerlineOuter }),
+    [drafts, generator, centerlineOuter],
+  );
+  const params: ShapeParameters = mode === 'basis' ? activeGenerator.defaults : parsed.values;
+  const paramsValid = mode === 'basis' || parsed.valid;
+  const shapeThicknessMm = params.shapeThickness;
+
   // Stap C: generatorvalidatie van de gekozen buitencontour (ook voor de 2D-preview).
   const preview = useMemo((): Result<ValidatedContour> | null => {
     if (!svg || !candidatesResult) return null;
     if (!candidatesResult.ok) return candidatesResult;
-    const sel = buildSelection(candidatesResult.value, svg.roles, selectionFrame, svg.scene.notices);
+    const sel = buildSelection(candidatesResult.value, svg.roles, selectionFrame, svg.scene.notices, {
+      interpretations: svg.interpretations,
+      shapeThicknessMm,
+    });
     return sel.ok ? { ok: true, value: sel.value.contour } : sel;
-  }, [svg, candidatesResult, selectionFrame]);
+  }, [svg, candidatesResult, selectionFrame, shapeThicknessMm]);
 
   const handleFile = useCallback(
     async (f: File) => {
@@ -161,7 +195,7 @@ export default function App() {
         setFile({ status: 'invalid', name: f.name, error: imported.error });
         return;
       }
-      setSvg({ scene: imported.value.scene, granularity: 'shapes', roles: imported.value.roles });
+      setSvg({ scene: imported.value.scene, granularity: 'shapes', roles: imported.value.roles, interpretations: {} });
       setFile({ status: 'valid', name: f.name });
     },
     [invalidate],
@@ -209,13 +243,22 @@ export default function App() {
     invalidate();
     setSvg((s) => (s ? { ...s, roles } : s));
   };
+  const changeInterpretations = (interpretations: Record<string, PathInterpretation>) => {
+    invalidate();
+    setSvg((s) => (s ? { ...s, interpretations } : s));
+  };
   const changeGranularity = (granularity: Granularity) => {
     if (!svg || !candidates || granularity === svg.granularity) return;
     const next = toResult(() => extractPathCandidates(svg.scene, selectionFrame, granularity));
     if (!next.ok) return;
     invalidate();
     // De keuze van de gebruiker blijft behouden: onderdelen erven de rol van hun vorm (en omgekeerd).
-    setSvg({ ...svg, granularity, roles: transferRoles(candidates, svg.roles, next.value) });
+    setSvg({
+      ...svg,
+      granularity,
+      roles: transferRoles(candidates, svg.roles, next.value),
+      interpretations: transferInterpretations(candidates, svg.roles, svg.interpretations, next.value),
+    });
   };
 
   const previewError = preview && !preview.ok ? preview.error : null;
@@ -239,9 +282,14 @@ export default function App() {
       if (!snapshot.svg) return;
       // Elke generator volgt dezelfde keten: rollen -> gevalideerde contour + details -> mesh.
       const frame = frameSizeFor(snapshot.mode, snapshot.params);
-      const { scene, granularity, roles } = snapshot.svg;
+      const { scene, granularity, roles, interpretations } = snapshot.svg;
       const found = toResult(() => extractPathCandidates(scene, frame, granularity));
-      const selection = found.ok ? buildSelection(found.value, roles, frame, scene.notices) : found;
+      const selection = found.ok
+        ? buildSelection(found.value, roles, frame, scene.notices, {
+            interpretations,
+            shapeThicknessMm: snapshot.params.shapeThickness,
+          })
+        : found;
       const result: Result<GenerationResult | ComboGenerationResult> = selection.ok
         ? generateFromSelection(selection.value.contour, selection.value.details, snapshot.generator, snapshot.params)
         : selection;
@@ -311,10 +359,12 @@ export default function App() {
               onClear={clearFile}
             />
 
-            {svg && candidates && (candidates.length > 1 || svg.granularity === 'elements') && (
+            {svg && candidates && showSelector(candidates, svg.granularity) && (
               <PathSelector
                 candidates={candidates}
                 roles={svg.roles}
+                interpretations={svg.interpretations}
+                onInterpretations={changeInterpretations}
                 frame={selectionFrame}
                 granularity={svg.granularity}
                 canSplit={hasGroupedShapes(candidates)}
@@ -325,9 +375,9 @@ export default function App() {
             )}
 
             {mode === 'expert' && (
-              <ParameterPanel specs={activeGenerator.params} draft={drafts[generator]} errors={parsed.errors} disabled={busy} onChange={changeParam} />
+              <ParameterPanel specs={activeGenerator.params.filter((s) => isParamShown(s, paramContext))} draft={drafts[generator]} errors={parsed.errors} disabled={busy} onChange={changeParam} />
             )}
-            {mode === 'basis' && <p className="basis-summary">{basisSummary(activeGenerator)}</p>}
+            {mode === 'basis' && <p className="basis-summary">{basisSummary(activeGenerator, paramContext)}</p>}
 
             <div className="actions">
               <GenerateButton busy={busy} disabled={!canStart} onClick={start} />
@@ -388,6 +438,14 @@ export default function App() {
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
+}
+
+/**
+ * De selector is nodig bij meerdere onderdelen, of als de interpretatie van
+ * het enige onderdeel een echte keuze is (open lijn of smalle band).
+ */
+function showSelector(candidates: SvgPathCandidate[], granularity: Granularity): boolean {
+  return candidates.length > 1 || granularity === 'elements' || candidates.some((c) => c.kind === 'line' || c.bandLike);
 }
 
 function fmtMm(n: number): string {

@@ -39,7 +39,7 @@ describe('alle vier generators op hetzelfde SVG (blad met nerven)', () => {
     const r = generateFromSelection(sel.contour, sel.details, 'stamp', STAMP_DEFAULTS);
     expect(r.ok).toBe(true);
     if (r.ok && 'mesh' in r.value) {
-      expectValidSolid(r.value.mesh, STAMP_DEFAULTS.handleHeight + STAMP_INTERNAL.plateThicknessMm + STAMP_DEFAULTS.reliefHeight);
+      expectValidSolid(r.value.mesh, STAMP_DEFAULTS.handleHeight + STAMP_INTERNAL.plateThicknessMm + STAMP_DEFAULTS.contourHeight);
     }
   });
 
@@ -50,7 +50,7 @@ describe('alle vier generators op hetzelfde SVG (blad met nerven)', () => {
       expectValidSolid(r.value.cutter.mesh, CUTTER_STAMP_DEFAULTS.height);
       expectValidSolid(
         r.value.stamp.mesh,
-        CUTTER_STAMP_DEFAULTS.handleHeight + STAMP_INTERNAL.plateThicknessMm + CUTTER_STAMP_DEFAULTS.reliefHeight,
+        CUTTER_STAMP_DEFAULTS.handleHeight + STAMP_INTERNAL.plateThicknessMm + CUTTER_STAMP_DEFAULTS.contourHeight,
       );
     }
   });

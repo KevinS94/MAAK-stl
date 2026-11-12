@@ -115,7 +115,10 @@ describe('App: Stempel en Cutter & Stempel', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     const selects = screen.getAllByRole('combobox', { name: /Rol van/ });
     expect(selects.map((s) => (s as HTMLSelectElement).value)).toEqual(['outer', 'detail']);
-    expect(screen.getByRole('combobox', { name: /Getekende rand/ })).toHaveValue('outer');
+    expect(screen.getByRole('combobox', { name: /Rol van .*Getekende rand/ })).toHaveValue('outer');
+    // De rand blijft een gesloten (volle) vorm; de smalle nerven worden standaard middellijnen.
+    const interps = screen.getAllByRole('combobox', { name: /Interpretatie van/ });
+    expect(interps.map((s) => (s as HTMLSelectElement).value)).toEqual(['shape', 'centerline']);
     expect(screen.getByText(/volledig opgevuld/)).toBeInTheDocument();
     expect(screen.getByText(/vorm ≈ 71 × 81 mm/)).toBeInTheDocument();
 
@@ -145,6 +148,35 @@ describe('App: Stempel en Cutter & Stempel', () => {
     expect(screen.getAllByRole('combobox', { name: /Rol van/ })).toHaveLength(2);
   });
 
+  it('Expert: hoogte contour en hoogte details zijn apart instelbaar; contour 0 schakelt "dikte contour" uit', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: 'Stempel' }));
+    await upload('blad.svg', SVG.leafWithVeins);
+    await user.click(screen.getByRole('radio', { name: 'Expert' }));
+    expect(screen.getByLabelText('Hoogte contour (mm)')).toHaveValue(1.5);
+    expect(screen.getByLabelText('Hoogte details (mm)')).toHaveValue(1.5);
+    expect(screen.getByLabelText('Dikte contour (mm)')).toBeEnabled();
+
+    // Contour en details apart: totale hoogte = handvat 12 + plaat 3 + hoogste reliëf.
+    await user.clear(screen.getByLabelText('Hoogte details (mm)'));
+    await user.type(screen.getByLabelText('Hoogte details (mm)'), '2.5');
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    expect(await screen.findByText(/Model klaar · .* × 17,5 mm/, {}, { timeout: 20000 })).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText('Hoogte contour (mm)'));
+    await user.type(screen.getByLabelText('Hoogte contour (mm)'), '0');
+    expect(screen.getByLabelText('Dikte contour (mm)')).toBeDisabled();
+    expect(screen.getByText(/Niet gebruikt: hoogte contour is 0 mm/)).toBeInTheDocument();
+    // Een ongeldige waarde in het uitgeschakelde veld blokkeert niets.
+    expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
+
+    await user.clear(screen.getByLabelText('Hoogte details (mm)'));
+    await user.type(screen.getByLabelText('Hoogte details (mm)'), '1');
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    expect(await screen.findByText(/Model klaar · .* × 16 mm/, {}, { timeout: 20000 })).toBeInTheDocument();
+  });
+
   it('Expert bij Cutter & Stempel toont twee gegroepeerde parametersecties', async () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
@@ -152,6 +184,6 @@ describe('App: Stempel en Cutter & Stempel', () => {
     await user.click(screen.getByRole('radio', { name: 'Expert' }));
     const legends = Array.from(container.querySelectorAll('.params-group__legend')).map((el) => el.textContent);
     expect(legends).toEqual(['Cookie cutter', 'Stempel']);
-    expect(screen.getAllByRole('spinbutton')).toHaveLength(10);
+    expect(screen.getAllByRole('spinbutton')).toHaveLength(11);
   });
 });

@@ -4,7 +4,7 @@ import { buildContour } from '../src/engine/contourProcessing';
 import { GeometryError } from '../src/engine/errors';
 import { pointInRing, ringBounds, signedArea } from '../src/engine/geometry2d';
 import { generateFromSelection } from '../src/engine/pipeline';
-import { regionArea } from '../src/engine/polygonOffset';
+import { pointInPaths, regionArea, regionToPaths } from '../src/engine/polygonOffset';
 import { parseSvgOrThrow, parseSvgSceneOrThrow } from '../src/engine/svgParser';
 import {
   buildSelection,
@@ -12,18 +12,23 @@ import {
   defaultRoles,
   extractPathCandidates,
   importSvgOrThrow,
+  interpretationOf,
   isSelectionUnambiguous,
   selectedOuters,
+  transferInterpretations,
   transferRoles,
 } from '../src/engine/svgPaths';
-import type { PathRole, SvgPathCandidate } from '../src/engine/types';
+import type { PathRole, Point2, SvgPathCandidate } from '../src/engine/types';
 import { buildDetailRegion } from '../src/generators/stampGeometry';
 import { canvaLeafSvg, SVG } from './fixtures';
-import { BASIC, candidatesOf, contourOf, selectionOf } from './helpers';
+import { ALL_SHAPES, BASIC, candidatesOf, contourOf, selectionOf } from './helpers';
 import { expectValidSolid } from './meshChecks';
 
 const rolesWith = (cands: SvgPathCandidate[], pick: (c: SvgPathCandidate) => PathRole) =>
   Object.fromEntries(cands.map((c) => [c.id, pick(c)]));
+
+const shiftBy = (o: Point2) => (r: Point2[]) => r.map((p) => ({ x: p.x - o.x, y: p.y - o.y }));
+const polylineLength = (r: Point2[]) => r.slice(1).reduce((s, p, i) => s + Math.hypot(p.x - r[i].x, p.y - r[i].y), 0);
 
 const circleArea = (r: number) => Math.PI * r * r;
 
@@ -102,21 +107,39 @@ describe('3. gesloten contour met open detaillijnen', () => {
     }
   });
 
-  it('een open lijn kan geen buitencontour zijn', () => {
+  it('een open lijn als buitencontour wordt altijd als middellijn gebruikt (nooit als gesloten vorm)', () => {
     const cands = candidatesOf(SVG.leafWithVeins);
     const open = cands.find((c) => !c.closed)!;
-    expect(() => selectedOuters(cands, rolesWith(cands, (c) => (c.id === open.id ? 'outer' : 'ignore')))).toThrow(GeometryError);
+    const roles = rolesWith(cands, (c) => (c.id === open.id ? 'outer' : 'ignore'));
+    expect(selectedOuters(cands, roles)).toHaveLength(1);
+    expect(interpretationOf(open, roles, { [open.id]: 'shape' })).toBe('centerline');
+    const sel = buildSelectionOrThrow(cands, roles, BASIC, [], { interpretations: { [open.id]: 'shape' } });
+    expect(sel.contour.centerline?.thicknessMm).toBe(8);
+    expect(() => selectedOuters(cands, rolesWith(cands, () => 'ignore'))).toThrow(GeometryError);
   });
 });
 
 describe('4. gesloten contour met afzonderlijke gevulde detailbanden', () => {
-  it('de banden worden gevulde details en worden NIET opnieuw verbreed', () => {
+  it('de banden worden als smalle band herkend en standaard als middellijn met de detaildikte gebruikt', () => {
     const cands = candidatesOf(SVG.circleWithFilledBands);
+    const roles = defaultRoles(cands);
     const details = cands.filter((c) => c.suggestedRole === 'detail');
     expect(details).toHaveLength(2);
-    expect(details.every((d) => d.kind === 'region')).toBe(true);
+    expect(details.every((d) => d.kind === 'region' && d.bandLike)).toBe(true);
+    expect(details.every((d) => interpretationOf(d, roles) === 'centerline')).toBe(true);
     const sel = selectionOf(SVG.circleWithFilledBands);
     expect(sel.contour.areaMm2).toBeCloseTo(circleArea(40), -1);
+    expect(sel.details).toHaveLength(2);
+    expect(sel.details.every((d) => !d.region && !d.closed)).toBe(true);
+    // Middellijn van 38 mm (tot op een halve bandbreedte van elk uiteinde) × detaildikte + ronde uiteinden.
+    for (const detailWidth of [0.4, 1, 3]) {
+      const expected = 2 * (38 * detailWidth + circleArea(detailWidth / 2));
+      expect(Math.abs(regionArea(buildDetailRegion(sel.details, detailWidth)) - expected) / expected).toBeLessThan(0.01);
+    }
+  });
+
+  it('als gesloten vorm worden de banden op hun getekende breedte gebruikt en NIET opnieuw verbreed', () => {
+    const sel = selectionOf(SVG.circleWithFilledBands, BASIC, undefined, 'shapes', ALL_SHAPES);
     // Getekende oppervlakte: 2 × (40 × 2) = 160 mm², ongeacht de ingestelde detailbreedte.
     for (const detailWidth of [0.4, 1, 3]) {
       expect(regionArea(buildDetailRegion(sel.details, detailWidth))).toBeCloseTo(160, 0);
@@ -143,9 +166,11 @@ describe('5. dikke gesloten buitenlijn (ringvorm)', () => {
     expect(sel.contour.areaMm2).toBeCloseTo(circleArea(40), -1);
     expect(sel.contour.widthMm).toBeCloseTo(80, 0);
     expect(sel.contour.notices.join(' ')).toMatch(/volledig opgevuld/);
-    // De nerf binnenin wordt detail en ligt binnen het silhouet.
+    // De smalle nerf binnenin wordt een detail (middellijn) en ligt binnen het silhouet.
     expect(sel.details).toHaveLength(1);
-    for (const p of sel.details[0].region!.outers[0]) expect(pointInRing(p, sel.contour.outer)).toBe(true);
+    for (const p of sel.details[0].ring) expect(pointInRing(p, sel.contour.outer)).toBe(true);
+    // De getekende rand zelf blijft als buitencontour een gesloten vorm (volle schijf), geen middellijn.
+    expect(sel.contour.centerline).toBeUndefined();
   });
 
   it('de binnenrand wordt geen uitsparing: een vulvorm heeft de volle schijf als holte', () => {
@@ -222,10 +247,29 @@ describe('7. het Canva-blad (getekende rand + nerven via geneste clipping)', () 
     expect(signedArea(sel.contour.outer)).toBeGreaterThan(0);
   });
 
-  it('de nerven worden een gevuld detail binnen het blad, op hun getekende breedte', () => {
+  it('de nerven worden standaard middellijnen binnen het blad (met vertakkingen), verbreed tot de detaildikte', () => {
+    const { candidates, roles } = importSvgOrThrow(svg, BASIC);
+    const veins = candidates.find((c) => c.suggestedRole === 'detail')!;
+    expect(veins.bandLike).toBe(true);
+    expect(interpretationOf(veins, roles)).toBe('centerline');
+    const sel = selectionOf(svg);
+    expect(sel.details.length).toBeGreaterThan(3); // hoofdnerf + zijnerven
+    for (const d of sel.details) for (const p of d.ring) expect(pointInRing(p, sel.contour.outer)).toBe(true);
+    // Elke middellijn ligt binnen de getekende nerven.
+    const veinPaths = regionToPaths({ outers: veins.region!.outers.map(shiftBy(sel.contour.centerOffset)), holes: veins.region!.holes.map(shiftBy(sel.contour.centerOffset)) });
+    for (const d of sel.details) for (const p of d.ring) expect(pointInPaths(p, veinPaths)).toBe(true);
+    // Breedte = detaildikte: oppervlakte ≈ totale middellijnlengte × breedte.
+    const w = DEFAULT_PARAMETERS.stamp.detailWidth;
+    const len = sel.details.reduce((s, d) => s + polylineLength(d.ring), 0);
+    const area = regionArea(buildDetailRegion(sel.details, w));
+    expect(area).toBeLessThan(len * w + sel.details.length * circleArea(w / 2) + 1);
+    expect(area).toBeGreaterThan(0.75 * len * w);
+  });
+
+  it('als gesloten vorm worden de nerven een gevuld detail op hun getekende breedte', () => {
     const { candidates } = importSvgOrThrow(svg, BASIC);
     const veins = candidates.find((c) => c.suggestedRole === 'detail')!;
-    const sel = selectionOf(svg);
+    const sel = selectionOf(svg, BASIC, undefined, 'shapes', ALL_SHAPES);
     expect(sel.details).toHaveLength(1);
     const d = sel.details[0];
     expect(d.region).toBeDefined();
@@ -244,8 +288,8 @@ describe('7. het Canva-blad (getekende rand + nerven via geneste clipping)', () 
       // Het nervenreliëf voegt volume toe: ongeveer de nervenoppervlakte × de reliëfhoogte.
       const extra = stamp.value.report.volumeMm3 - noDetails.value.report.volumeMm3;
       const veinsArea = regionArea(buildDetailRegion(sel.details, DEFAULT_PARAMETERS.stamp.detailWidth));
-      expect(extra).toBeGreaterThan(0.9 * veinsArea * DEFAULT_PARAMETERS.stamp.reliefHeight);
-      expect(extra).toBeLessThan(1.05 * veinsArea * DEFAULT_PARAMETERS.stamp.reliefHeight);
+      expect(extra).toBeGreaterThan(0.9 * veinsArea * DEFAULT_PARAMETERS.stamp.detailHeight);
+      expect(extra).toBeLessThan(1.05 * veinsArea * DEFAULT_PARAMETERS.stamp.detailHeight);
     }
     const combo = generateFromSelection(sel.contour, sel.details, 'cutterStamp', DEFAULT_PARAMETERS.cutterStamp);
     expect(combo.ok).toBe(true);
@@ -272,10 +316,14 @@ describe('7. het Canva-blad (getekende rand + nerven via geneste clipping)', () 
     const elements = extractPathCandidates(scene, BASIC, 'elements');
     expect(elements.length).toBeGreaterThan(shapes.length);
     const roles = transferRoles(shapes, defaultRoles(shapes), elements);
+    const interpretations = transferInterpretations(shapes, defaultRoles(shapes), {}, elements);
     const a = buildSelectionOrThrow(shapes, defaultRoles(shapes), BASIC);
-    const b = buildSelectionOrThrow(elements, roles, BASIC);
+    const b = buildSelectionOrThrow(elements, roles, BASIC, [], { interpretations });
+    // De stukken van de rand blijven een gesloten vorm (zoals de rand als geheel), ook al is elk stuk een smalle band.
+    expect(elements.filter((c) => roles[c.id] === 'outer').every((c) => interpretations[c.id] === 'shape')).toBe(true);
     expect(b.contour.areaMm2).toBeCloseTo(a.contour.areaMm2, -1);
-    expect(b.details).toHaveLength(1);
+    expect(b.contour.centerline).toBeUndefined();
+    expect(b.details.length).toBe(a.details.length);
   });
 });
 
@@ -294,7 +342,8 @@ describe('8. de gebruiker wijzigt de buitencontour', () => {
     const elements = candidatesOf(svg, BASIC, 'elements');
     const biggest = elements.reduce((a, b) => (b.areaMm2 > a.areaMm2 ? b : a));
     const full = selectionOf(svg);
-    const partial = buildSelectionOrThrow(elements, rolesWith(elements, (c) => (c.id === biggest.id ? 'outer' : 'ignore')), BASIC);
+    const roles = rolesWith(elements, (c) => (c.id === biggest.id ? 'outer' : 'ignore'));
+    const partial = buildSelectionOrThrow(elements, roles, BASIC, [], { interpretations: { [biggest.id]: 'shape' } });
     expect(partial.contour.areaMm2).toBeLessThan(0.5 * full.contour.areaMm2);
   });
 
@@ -307,9 +356,20 @@ describe('8. de gebruiker wijzigt de buitencontour', () => {
 
   it('zonder gekozen buitencontour kan er niet gestart worden', () => {
     const cands = candidatesOf(SVG.onlyOpenLines);
-    const r = buildSelection(cands, defaultRoles(cands), BASIC);
+    const r = buildSelection(cands, rolesWith(cands, () => 'ignore'), BASIC);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('NO_OUTER_SELECTED');
+  });
+
+  it('enkel open lijnen: de langste wordt voorgesteld als buitencontour (middellijn)', () => {
+    const cands = candidatesOf(SVG.onlyOpenLines);
+    const roles = defaultRoles(cands);
+    const outers = cands.filter((c) => roles[c.id] === 'outer');
+    expect(outers).toHaveLength(1);
+    expect(interpretationOf(outers[0], roles)).toBe('centerline');
+    const r = buildSelection(cands, roles, BASIC);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.contour.centerline).toEqual({ thicknessMm: 8 });
   });
 
   it('een gesloten detail (omlijnde ring) naast de buitencontour blijft een lijn-detail', () => {
