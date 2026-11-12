@@ -42,8 +42,8 @@ Alles gebeurt **lokaal in de browser**: geen backend, geen database, geen accoun
 ## Hoe maak je een SVG in Canva?
 
 1. Maak een ontwerp met een eigen formaat van **100 × 100 mm**.
-2. Plaats **één eenvoudige, gesloten, gevulde vectorvorm** in het frame (bijvoorbeeld een element uit *Vormen*).
-3. Gebruik **geen** rasterafbeeldingen (foto's), tekst, lijnen of **achtergrondvormen**.
+2. Plaats een **gesloten vectorvorm** in het frame: een gevulde vorm of een dikke, gesloten rand (bijvoorbeeld een blad met een getekende omtrek). Lijnen of vormen binnenin mogen; die kun je na het uploaden als stempeldetail kiezen.
+3. Gebruik **geen** rasterafbeeldingen (foto's) of tekst. Achtergrondvormen worden herkend en standaard genegeerd.
 4. Exporteer via *Delen → Downloaden → Bestandstype: SVG*. Vink *Transparante achtergrond* aan als die optie beschikbaar is (Canva Pro), zodat er geen achtergrondrechthoek in het bestand komt.
 5. Upload het bestand in MAAK! Shape to STL.
 6. Klik op **Start** en download je STL.
@@ -161,7 +161,17 @@ Na het schalen wordt de vorm in het XY-vlak rond (0, 0) gecentreerd; de afmeting
 
 **Transformaties:** `translate`, `scale`, `rotate`, `skewX`, `skewY` en `matrix`, zowel op groepen als op individuele vormen.
 
-**Vulregels:** `nonzero` en `evenodd`. Overlappende gevulde vormen worden samengevoegd tot één contour.
+**Vulregels:** `nonzero` en `evenodd`.
+
+**Clipping:** geneste `clipPath`s (ook op getransformeerde groepen, zoals Canva ze exporteert) worden exact als polygondoorsnede toegepast met Clipper2; omlijnde lijnen worden exact bijgesneden tot het zichtbare stuk. Er wordt niet gerasterd. Constructies die niet exact te verwerken zijn (een `clip-path` binnen een `clipPath`-definitie, CSS-vormen zoals `circle()`, `objectBoundingBox`-eenheden, maskers) geven een specifieke melding.
+
+**Meerdere vormen en de SVG-selector.** De SVG-keten bestaat uit drie gescheiden stappen:
+
+1. **Inlezen** (`svgParser.ts`): alle zichtbare gevulde vormen en omlijnde lijnen, met hun clips. Meerdere losse vormen of open lijnen zijn hier nooit een fout.
+2. **Selectie** (`svgPaths.ts`): de zichtbare geometrie wordt gegroepeerd tot *logische vormen* — overlappende stukken van dezelfde kleur horen samen, en geometrie die bijna volledig onder later getekende geometrie ligt, hoort bij de vorm die ze bedekt. Zo is een Canva-rand die uit acht geclipte stukken bestaat één klikbare vorm. Elke vorm krijgt een voorgestelde rol (buitencontour · stempeldetail · negeren), die je in de preview (klikken) of in de lijst kunt wijzigen. Met *Toon afzonderlijke onderdelen* kies je per stuk.
+3. **Validatie** (pas na de keuze): de gekozen buitencontour-onderdelen worden verenigd en hun binnenruimte wordt opgevuld — een dikke getekende rand wordt zo de volle vorm, zonder ongewenste uitsparing. Pas dan wordt gecontroleerd dat dit één samenhangende, gesloten vorm is.
+
+**Details.** Lijnen (strokes) worden een band van exact de ingestelde *Dikte details*. Gevulde vormen/banden (zoals Canva-nerven) worden op hun getekende breedte gebruikt en niet nogmaals verbreed.
 
 **Curves** worden adaptief omgezet naar polygonen: maximaal 0,25 mm per lijnstukje op de uiteindelijke afmeting (min. 4, max. 720 per curve). Bij een cirkel van 70 mm is de afwijking kleiner dan 0,01 mm.
 
@@ -179,7 +189,8 @@ Na het schalen wordt de vorm in het XY-vlak rond (0, 0) gecentreerd; de afmeting
 **Gedeelde engine** (`src/engine/`, volledig los van React):
 
 1. `svgValidation.ts` — veiligheidscontrole, `<use>` uitvouwen, clip-paths herschrijven.
-2. `svgParser.ts` — `SVGLoader` → gevulde vormen met hun echte curves.
+2. `svgParser.ts` — `SVGLoader` → alle zichtbare gevulde vormen en lijnen met hun echte curves en clips (stap A).
+   `svgPaths.ts` — clipping exact toepassen, groeperen tot logische vormen, rollen voorstellen (stap B) en de gekozen buitencontour valideren (stap C).
 3. `svgScaling.ts` — SVG-eenheden → millimeter volgens het referentiekader.
 4. `contourProcessing.ts` — discretiseren, vulregels, clip-paths, union, achtergrond herkennen, vereenvoudigen, controleren op zelfdoorsnijding, centreren.
 5. `polygonOffset.ts` — offsets via Clipper2 met afgeronde hoeken (overal exact dezelfde afstand).
@@ -198,9 +209,11 @@ Een model wordt pas getoond én is pas downloadbaar nadat de mesh-validatie gesl
 
 ## Beperkingen van versie 1
 
-- De SVG moet **één samenhangende, gesloten, gevulde vorm** opleveren. Meerdere losse vormen geven een foutmelding (overlappende vormen worden wel samengevoegd).
-- **Openingen binnenin** de vorm (bijv. een donut) worden genegeerd: enkel de buitencontour wordt gebruikt. Je krijgt daar een melding over.
-- Lijnen zonder vulling (strokes), tekst, rasterafbeeldingen, maskers, geneste `<svg>`-elementen, symbolen met eigen viewBox en clip-paths in `objectBoundingBox`-eenheden worden niet ondersteund en geven een foutmelding. Omlijningen op gevulde vormen worden genegeerd (melding).
+- De **gekozen buitencontour** moet één samenhangende, gesloten vorm opleveren. Kies je twee losse vormen als buitencontour, dan volgt een melding; de SVG zelf mag wel meerdere losse vormen bevatten.
+- **Openingen binnenin** de buitencontour (bijv. een donut of de binnenkant van een getekende rand) worden opgevuld: enkel de buitenrand wordt gebruikt. Je krijgt daar een melding over.
+- Een **omlijnde** gesloten lijn (stroke zonder vulling) als buitencontour gebruikt de middellijn van de stroke, niet de buitenkant van de lijndikte.
+- Het groeperen tot logische vormen gebeurt op kleur en overlap. Raken details van dezelfde kleur de rand, dan vormen ze één vorm; gebruik dan *Toon afzonderlijke onderdelen*.
+- Tekst, rasterafbeeldingen, maskers, geneste `<svg>`-elementen, symbolen met eigen viewBox en clip-paths in `objectBoundingBox`-eenheden worden niet ondersteund en geven een foutmelding. Omlijningen op gevulde vormen worden genegeerd (melding).
 - CSS die vormen verbergt via een `<style>`-klasse met `display: none` wordt niet herkend; `display="none"` als attribuut of inline stijl wel.
 - Inkepingen die zo smal zijn dat de 2 mm-drukrand een volledig ingesloten holte zou vormen, geven een foutmelding. Smalle spleten die gewoon overbrugd worden, zijn toegestaan.
 - Delen van de vorm die smaller zijn dan twee keer de wanddikte worden massief (de binnenwand trekt zich terug). Wordt de binnenruimte volledig nul, dan volgt een foutmelding.

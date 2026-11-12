@@ -22,7 +22,7 @@
 import {
   COOKIE_CUTTER_DEFAULTS,
   COOKIE_CUTTER_INTERNAL,
-  COOKIE_CUTTER_LIMITS,
+  COOKIE_CUTTER_PARAMS,
 } from '../config/defaults';
 import { fail, toResult } from '../engine/errors';
 import { ringStrictlyInside } from '../engine/geometry2d';
@@ -49,7 +49,7 @@ export function buildCookieCutter(
   params: ShapeParameters,
   opts: CookieCutterOptions = COOKIE_CUTTER_INTERNAL,
 ): MeshData {
-  assertParameters(params, COOKIE_CUTTER_LIMITS);
+  assertParameters(params, COOKIE_CUTTER_PARAMS);
   const H = params.height;
   const t = params.wallThickness;
   const outer = contour.outer;
@@ -111,10 +111,12 @@ export function buildCookieCutter(
 
 export const cookieCutterGenerator: ShapeGenerator = {
   id: 'cookieCutter',
+  kind: 'single',
   label: 'Cookie cutter',
   title: 'Cookie cutter',
   description: 'Een koekjesuitsteker met een dunne snijwand en een brede drukrand bovenaan.',
   defaults: COOKIE_CUTTER_DEFAULTS,
-  limits: COOKIE_CUTTER_LIMITS,
-  generate: (contour, params) => toResult(() => buildCookieCutter(contour, params)),
+  params: COOKIE_CUTTER_PARAMS,
+  usesDetails: false,
+  generate: (contour, _details, params) => toResult(() => buildCookieCutter(contour, params)),
 };

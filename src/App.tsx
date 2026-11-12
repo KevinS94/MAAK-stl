@@ -5,64 +5,87 @@ import { GeneratorTabs } from './components/GeneratorTabs';
 import { Header } from './components/Header';
 import { HelpDialog } from './components/HelpDialog';
 import { ModeToggle } from './components/ModeToggle';
-import { ParameterPanel, type ParameterDraft } from './components/ParameterPanel';
+import { draftFromDefaults, ParameterPanel, type ParameterDraft } from './components/ParameterPanel';
+import { PathSelector } from './components/PathSelector';
 import { Preview3D } from './components/Preview3D';
 import { SVGUploader, type FileStatus } from './components/SVGUploader';
-import { BASIC_FRAME_MM, DEFAULT_PARAMETERS, PARAMETER_LIMITS } from './config/defaults';
-import { buildContour } from './engine/contourProcessing';
+import { BASIC_FRAME_MM, DEFAULT_PARAMETERS, PARAMS_BY_GENERATOR } from './config/defaults';
 import { toResult } from './engine/errors';
-import { generateModel } from './engine/pipeline';
-import { exportBinaryStl, stlFileName } from './engine/stlExporter';
-import { parseSvg } from './engine/svgParser';
+import { generateFromSelection } from './engine/pipeline';
+import { comboStlFileNames, exportBinaryStl, stlFileName } from './engine/stlExporter';
+import type { SvgScene } from './engine/svgParser';
+import {
+  buildSelection,
+  extractPathCandidates,
+  hasGroupedShapes,
+  importSvg,
+  transferRoles,
+  type Granularity,
+} from './engine/svgPaths';
 import { frameSizeFor } from './engine/svgScaling';
 import { validateSvgFile } from './engine/svgValidation';
 import type {
   ApplicationMode,
+  Bounds3,
+  ComboGenerationResult,
   GenerationResult,
   GeneratorType,
   GeometryValidationError,
-  SVGGeometry,
+  PathRole,
+  Result,
   ShapeParameters,
+  SvgPathCandidate,
+  ValidatedContour,
 } from './engine/types';
-import { GENERATORS, getGenerator } from './generators';
+import { GENERATORS, getGenerator, type AnyGenerator } from './generators';
 
 type GenerationState =
   | { status: 'idle' }
   | { status: 'generating' }
   | { status: 'success'; result: GenerationResult; fileName: string }
+  | { status: 'successCombo'; result: ComboGenerationResult; fileNames: { cutter: string; stamp: string } }
   | { status: 'error'; error: GeometryValidationError };
 
-const PARAM_KEYS: (keyof ShapeParameters)[] = ['length', 'width', 'height', 'wallThickness'];
-
-function toDraft(p: ShapeParameters): ParameterDraft {
-  return {
-    length: String(p.length),
-    width: String(p.width),
-    height: String(p.height),
-    wallThickness: String(p.wallThickness),
-  };
+/** Geïmporteerde SVG (stap A) + de rolkeuze van de gebruiker (stap B). */
+interface SvgState {
+  scene: SvgScene;
+  granularity: Granularity;
+  roles: Record<string, PathRole>;
 }
 
 function initialDrafts(): Record<GeneratorType, ParameterDraft> {
   return {
-    cookieCutter: toDraft(DEFAULT_PARAMETERS.cookieCutter),
-    fillingMold: toDraft(DEFAULT_PARAMETERS.fillingMold),
+    cookieCutter: draftFromDefaults(DEFAULT_PARAMETERS.cookieCutter),
+    fillingMold: draftFromDefaults(DEFAULT_PARAMETERS.fillingMold),
+    stamp: draftFromDefaults(DEFAULT_PARAMETERS.stamp),
+    cutterStamp: draftFromDefaults(DEFAULT_PARAMETERS.cutterStamp),
   };
 }
 
 function parseDraft(draft: ParameterDraft, generator: GeneratorType) {
-  const limits = PARAMETER_LIMITS[generator];
-  const errors: Partial<Record<keyof ShapeParameters, string>> = {};
-  const values = {} as ShapeParameters;
-  for (const key of PARAM_KEYS) {
-    const raw = draft[key].trim().replace(',', '.');
+  const specs = PARAMS_BY_GENERATOR[generator];
+  const errors: Partial<Record<string, string>> = {};
+  const values: ShapeParameters = {};
+  for (const spec of specs) {
+    const raw = (draft[spec.key] ?? '').trim().replace(',', '.');
     const n = raw === '' ? NaN : Number(raw);
-    const { min, max } = limits[key];
-    if (!Number.isFinite(n)) errors[key] = 'Vul een getal in.';
-    else if (n < min || n > max) errors[key] = `Kies een waarde tussen ${min} en ${max} mm.`;
-    values[key] = n;
+    if (!Number.isFinite(n)) errors[spec.key] = 'Vul een getal in.';
+    else if (n < spec.min || n > spec.max) errors[spec.key] = `Kies een waarde tussen ${spec.min} en ${spec.max} mm.`;
+    values[spec.key] = n;
   }
   return { values, errors, valid: Object.keys(errors).length === 0 };
+}
+
+function basisSummary(gen: AnyGenerator): string {
+  const extra = gen.params
+    .filter((p) => p.key !== 'length' && p.key !== 'width')
+    .map((p) => `${p.label.toLowerCase()} ${fmtMm(p.default)} mm`)
+    .join(' · ');
+  return `Automatische instellingen: kader 100 × 100 mm${extra ? ' · ' + extra : ''}`;
+}
+
+function fmtDims(bounds: Bounds3): string {
+  return `${fmtMm(bounds.max[0] - bounds.min[0])} × ${fmtMm(bounds.max[1] - bounds.min[1])} × ${fmtMm(bounds.max[2] - bounds.min[2])} mm`;
 }
 
 export default function App() {
@@ -70,8 +93,9 @@ export default function App() {
   const [mode, setMode] = useState<ApplicationMode>('basis');
   const [drafts, setDrafts] = useState(initialDrafts);
   const [file, setFile] = useState<FileStatus>({ status: 'empty' });
-  const [geometry, setGeometry] = useState<SVGGeometry | null>(null);
+  const [svg, setSvg] = useState<SvgState | null>(null);
   const [generation, setGeneration] = useState<GenerationState>({ status: 'idle' });
+  const [comboView, setComboView] = useState<'cutter' | 'stamp'>('cutter');
   const [helpOpen, setHelpOpen] = useState(false);
   /** Elke nieuwe aanvraag krijgt een nummer; verouderde resultaten worden genegeerd. */
   const requestRef = useRef(0);
@@ -86,18 +110,29 @@ export default function App() {
     setGeneration({ status: 'idle' });
   }, []);
 
-  // 2D-preview van de contour, op de schaal die bij Start gebruikt wordt.
-  const preview = useMemo(() => {
-    if (!geometry) return null;
-    const frame = frameSizeFor(paramsValid ? mode : 'basis', paramsValid ? params : activeGenerator.defaults);
-    return buildContour(geometry, frame);
-  }, [geometry, mode, params, paramsValid, activeGenerator]);
+  const frame = frameSizeFor(paramsValid ? mode : 'basis', paramsValid ? params : activeGenerator.defaults);
+  const selectionFrame = useMemo(() => ({ length: frame.length, width: frame.width }), [frame.length, frame.width]);
+
+  // Stap B: alle selecteerbare vormen/lijnen op de schaal die bij Start gebruikt wordt.
+  const candidatesResult = useMemo<Result<SvgPathCandidate[]> | null>(
+    () => (svg ? toResult(() => extractPathCandidates(svg.scene, selectionFrame, svg.granularity)) : null),
+    [svg, selectionFrame],
+  );
+  const candidates = candidatesResult?.ok ? candidatesResult.value : null;
+
+  // Stap C: generatorvalidatie van de gekozen buitencontour (ook voor de 2D-preview).
+  const preview = useMemo((): Result<ValidatedContour> | null => {
+    if (!svg || !candidatesResult) return null;
+    if (!candidatesResult.ok) return candidatesResult;
+    const sel = buildSelection(candidatesResult.value, svg.roles, selectionFrame, svg.scene.notices);
+    return sel.ok ? { ok: true, value: sel.value.contour } : sel;
+  }, [svg, candidatesResult, selectionFrame]);
 
   const handleFile = useCallback(
     async (f: File) => {
       invalidate();
       const id = requestRef.current;
-      setGeometry(null);
+      setSvg(null);
       setFile({ status: 'processing', name: f.name });
       const check = toResult(() => validateSvgFile(f));
       if (!check.ok) {
@@ -116,16 +151,17 @@ export default function App() {
         return;
       }
       if (id !== requestRef.current) return;
-      const parsedSvg = parseSvg(text);
-      // Controleer meteen of er één bruikbare contour in zit (op het basiskader).
-      const contour = parsedSvg.ok ? buildContour(parsedSvg.value, BASIC_FRAME_MM) : parsedSvg;
+
+      // Stap A + B: inlezen en alle zichtbare geometrie herkennen. Meerdere losse
+      // vormen of open lijnen zijn hier nooit een fout; de gebruiker kiest de rollen
+      // en pas daarna wordt de gekozen buitencontour gevalideerd (stap C).
+      const imported = importSvg(text, BASIC_FRAME_MM);
       if (id !== requestRef.current) return;
-      if (!parsedSvg.ok || !contour.ok) {
-        const error = !parsedSvg.ok ? parsedSvg.error : !contour.ok ? contour.error : null;
-        if (error) setFile({ status: 'invalid', name: f.name, error });
+      if (!imported.ok) {
+        setFile({ status: 'invalid', name: f.name, error: imported.error });
         return;
       }
-      setGeometry(parsedSvg.value);
+      setSvg({ scene: imported.value.scene, granularity: 'shapes', roles: imported.value.roles });
       setFile({ status: 'valid', name: f.name });
     },
     [invalidate],
@@ -151,7 +187,7 @@ export default function App() {
 
   const clearFile = useCallback(() => {
     invalidate();
-    setGeometry(null);
+    setSvg(null);
     setFile({ status: 'empty' });
   }, [invalidate]);
 
@@ -165,51 +201,89 @@ export default function App() {
     invalidate();
     setMode(m);
   };
-  const changeParam = (key: keyof ShapeParameters, value: string) => {
+  const changeParam = (key: string, value: string) => {
     invalidate();
     setDrafts((d) => ({ ...d, [generator]: { ...d[generator], [key]: value } }));
   };
+  const changeRoles = (roles: Record<string, PathRole>) => {
+    invalidate();
+    setSvg((s) => (s ? { ...s, roles } : s));
+  };
+  const changeGranularity = (granularity: Granularity) => {
+    if (!svg || !candidates || granularity === svg.granularity) return;
+    const next = toResult(() => extractPathCandidates(svg.scene, selectionFrame, granularity));
+    if (!next.ok) return;
+    invalidate();
+    // De keuze van de gebruiker blijft behouden: onderdelen erven de rol van hun vorm (en omgekeerd).
+    setSvg({ ...svg, granularity, roles: transferRoles(candidates, svg.roles, next.value) });
+  };
 
   const previewError = preview && !preview.ok ? preview.error : null;
-  const canStart = Boolean(geometry) && file.status === 'valid' && paramsValid && !previewError;
+  const canStart = Boolean(svg) && file.status === 'valid' && paramsValid && !previewError;
 
   const start = () => {
-    if (!geometry || !canStart) return;
+    if (!canStart) return;
     const id = ++requestRef.current;
-    const snapshot = { geometry, generator, mode, params: { ...params }, fileName: file.status === 'valid' ? file.name : 'vorm.svg' };
+    const snapshot = {
+      generator,
+      mode,
+      params: { ...params },
+      fileName: file.status === 'valid' ? file.name : 'vorm.svg',
+      svg,
+    };
     setGeneration({ status: 'generating' });
     // Even wachten zodat de knopstatus zichtbaar wordt; de berekening zelf is synchroon.
     window.setTimeout(() => {
       if (id !== requestRef.current) return;
-      const result = generateModel(snapshot.geometry, snapshot.generator, snapshot.mode, snapshot.params);
+
+      if (!snapshot.svg) return;
+      // Elke generator volgt dezelfde keten: rollen -> gevalideerde contour + details -> mesh.
+      const frame = frameSizeFor(snapshot.mode, snapshot.params);
+      const { scene, granularity, roles } = snapshot.svg;
+      const found = toResult(() => extractPathCandidates(scene, frame, granularity));
+      const selection = found.ok ? buildSelection(found.value, roles, frame, scene.notices) : found;
+      const result: Result<GenerationResult | ComboGenerationResult> = selection.ok
+        ? generateFromSelection(selection.value.contour, selection.value.details, snapshot.generator, snapshot.params)
+        : selection;
       if (id !== requestRef.current) return;
-      setGeneration(
-        result.ok
-          ? { status: 'success', result: result.value, fileName: stlFileName(snapshot.generator, snapshot.fileName) }
-          : { status: 'error', error: result.error },
-      );
+
+      if (!result.ok) {
+        setGeneration({ status: 'error', error: result.error });
+        return;
+      }
+      if ('cutter' in result.value) {
+        setComboView('cutter');
+        setGeneration({ status: 'successCombo', result: result.value, fileNames: comboStlFileNames(snapshot.fileName) });
+      } else {
+        setGeneration({ status: 'success', result: result.value, fileName: stlFileName(snapshot.generator, snapshot.fileName) });
+      }
     }, 30);
   };
 
-  const download = () => {
-    if (generation.status !== 'success' || !generation.result.report.valid) return;
-    const buffer = exportBinaryStl(generation.result.mesh);
+  function triggerDownload(buffer: ArrayBuffer, fileName: string) {
     const blob = new Blob([buffer], { type: 'model/stl' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = generation.fileName;
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     a.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  const downloadSingle = () => {
+    if (generation.status !== 'success' || !generation.result.report.valid) return;
+    triggerDownload(exportBinaryStl(generation.result.mesh), generation.fileName);
+  };
+  const downloadCombo = (which: 'cutter' | 'stamp') => {
+    if (generation.status !== 'successCombo') return;
+    const sub = generation.result[which];
+    if (!sub.report.valid) return;
+    triggerDownload(exportBinaryStl(sub.mesh), generation.fileNames[which]);
   };
 
   const busy = generation.status === 'generating';
-  const result = generation.status === 'success' ? generation.result : null;
-  const dims = result
-    ? result.report.bounds.max.map((v, i) => v - result.report.bounds.min[i])
-    : null;
 
   return (
     <div className="app">
@@ -237,21 +311,23 @@ export default function App() {
               onClear={clearFile}
             />
 
-            {mode === 'expert' && (
-              <ParameterPanel
-                draft={drafts[generator]}
-                limits={activeGenerator.limits}
-                errors={parsed.errors}
+            {svg && candidates && (candidates.length > 1 || svg.granularity === 'elements') && (
+              <PathSelector
+                candidates={candidates}
+                roles={svg.roles}
+                frame={selectionFrame}
+                granularity={svg.granularity}
+                canSplit={hasGroupedShapes(candidates)}
                 disabled={busy}
-                onChange={changeParam}
+                onChange={changeRoles}
+                onGranularity={changeGranularity}
               />
             )}
-            {mode === 'basis' && (
-              <p className="basis-summary">
-                Automatische instellingen: kader 100 × 100 mm · hoogte {activeGenerator.defaults.height} mm · wanddikte{' '}
-                {String(activeGenerator.defaults.wallThickness).replace('.', ',')} mm
-              </p>
+
+            {mode === 'expert' && (
+              <ParameterPanel specs={activeGenerator.params} draft={drafts[generator]} errors={parsed.errors} disabled={busy} onChange={changeParam} />
             )}
+            {mode === 'basis' && <p className="basis-summary">{basisSummary(activeGenerator)}</p>}
 
             <div className="actions">
               <GenerateButton busy={busy} disabled={!canStart} onClick={start} />
@@ -263,14 +339,45 @@ export default function App() {
               </p>
             )}
 
-            {result && dims && (
+            {generation.status === 'success' && (
               <section className="result" aria-label="Resultaat">
-                <Preview3D mesh={result.mesh} />
+                <Preview3D mesh={generation.result.mesh} />
                 <div className="result__footer">
-                  <p className="status status--ok">
-                    Model klaar · {fmtMm(dims[0])} × {fmtMm(dims[1])} × {fmtMm(dims[2])} mm
-                  </p>
-                  <DownloadButton fileName={generation.status === 'success' ? generation.fileName : ''} onDownload={download} />
+                  <p className="status status--ok">Model klaar · {fmtDims(generation.result.report.bounds)}</p>
+                  <DownloadButton fileName={generation.fileName} onDownload={downloadSingle} />
+                </div>
+              </section>
+            )}
+
+            {generation.status === 'successCombo' && (
+              <section className="result" aria-label="Resultaat">
+                <div className="model-switch" role="radiogroup" aria-label="Te bekijken model">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={comboView === 'cutter'}
+                    className={`model-switch__option${comboView === 'cutter' ? ' is-active' : ''}`}
+                    onClick={() => setComboView('cutter')}
+                  >
+                    Cookie cutter
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={comboView === 'stamp'}
+                    className={`model-switch__option${comboView === 'stamp' ? ' is-active' : ''}`}
+                    onClick={() => setComboView('stamp')}
+                  >
+                    Stempel
+                  </button>
+                </div>
+                <Preview3D mesh={generation.result[comboView].mesh} />
+                <div className="result__footer">
+                  <p className="status status--ok">Model klaar · {fmtDims(generation.result[comboView].report.bounds)}</p>
+                  <div className="result__downloads">
+                    <DownloadButton fileName={generation.fileNames.cutter} onDownload={() => downloadCombo('cutter')} />
+                    <DownloadButton fileName={generation.fileNames.stamp} onDownload={() => downloadCombo('stamp')} />
+                  </div>
                 </div>
               </section>
             )}

@@ -135,8 +135,10 @@ describe('App', () => {
     expect(screen.getByText('foto.svg')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
 
+    // Twee losse vormen zijn geen fout meer bij het importeren: de gebruiker kiest de buitencontour.
     await upload('twee.svg', SVG.multiple);
-    expect(await screen.findByRole('alert')).toHaveTextContent(/losse vormen/);
+    expect(await screen.findByText(/SVG geldig/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
 
     await upload('cirkel.svg', SVG.circle);
     expect(await screen.findByText(/SVG geldig/)).toBeInTheDocument();

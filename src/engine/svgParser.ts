@@ -1,13 +1,20 @@
 /**
- * Zet een (opgeschoonde) SVG om naar curve-gebaseerde geometrie met behulp
- * van de officiële Three.js SVGLoader. Transformaties van groepen en
- * individuele vormen worden door SVGLoader toegepast.
+ * Stap A van de SVG-keten: het bestand veilig inlezen en ALLE zichtbare
+ * vectorgeometrie herkennen, zonder al te oordelen over "één vorm" of
+ * "meerdere vormen". Dat oordeel hoort pas bij de generatorvalidatie, nadat
+ * de gebruiker gekozen heeft wat de buitencontour is (zie `svgPaths.ts`).
+ *
+ * Gebruikt de officiële Three.js SVGLoader; transformaties van groepen en
+ * individuele vormen worden door SVGLoader toegepast. Clip-paths worden
+ * door `sanitizeSvg` herschreven naar gemarkeerde geometrie, die hier per
+ * clip-id verzameld wordt zodat de geometrische stap ze exact (met
+ * polygonbewerkingen) kan toepassen.
  */
 import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader.js';
 import type { ShapePath } from 'three';
 import { fail, toResult } from './errors';
 import { CLIP_GEOMETRY_ATTR, CLIP_TARGET_ATTR, sanitizeSvg } from './svgValidation';
-import type { Result, SVGGeometry, SVGShape, SVGSubPath } from './types';
+import type { Result, SVGFillRule, SVGFrame, SVGGeometry, SVGShape, SVGSubPath } from './types';
 
 interface LoaderStyle {
   fill?: string;
@@ -32,8 +39,44 @@ function toSubPaths(shapePath: ShapePath): SVGSubPath[] {
     .map((sp) => ({ curves: sp.curves, closed: Boolean(sp.autoClose) }));
 }
 
-/** Leest de SVG-tekst veilig in. Gooit een GeometryError bij problemen. */
-export function parseSvgOrThrow(text: string): SVGGeometry {
+/** Eén zichtbaar, getekend SVG-element, in tekenvolgorde. */
+export interface SceneElement {
+  /** Tekenvolgorde (later = bovenop). */
+  index: number;
+  elementName: string;
+  /**
+   * `fill`: het element heeft een vulling; de zichtbare geometrie is het
+   * gevulde gebied (ook als het een dikke "lijn" is die als gevulde band
+   * geëxporteerd werd). `stroke`: enkel een omlijning, geen vulling; de
+   * geometrie is een (open of gesloten) lijn.
+   */
+  kind: 'fill' | 'stroke';
+  subPaths: SVGSubPath[];
+  fillRule: SVGFillRule;
+  /** Id's van alle clipPaths die (via voorouders) op dit element van toepassing zijn. */
+  clipIds: string[];
+  /** Genormaliseerde kleur van de vulling of omlijning (voor het groeperen tot logische vormen). */
+  paint: string;
+}
+
+/** Resultaat van stap A: alle zichtbare geometrie, nog zonder rollen. */
+export interface SvgScene {
+  frame: SVGFrame;
+  elements: SceneElement[];
+  /** Geometrie per clipPath-id (in hetzelfde coördinatenstelsel als de elementen). */
+  clipRegions: Record<string, SVGShape[]>;
+  /** Aantal onzichtbare (niet gevulde én niet omlijnde, of verborgen) elementen. */
+  invisibleCount: number;
+  notices: string[];
+}
+
+/**
+ * Leest de SVG veilig in en geeft alle zichtbare vectorgeometrie terug.
+ * Verwerpt NOOIT op basis van het aantal vormen of open lijnen; enkel
+ * onveilige, onleesbare of niet-ondersteunde bestanden en een SVG zonder
+ * enige zichtbare geometrie leiden tot een fout.
+ */
+export function parseSvgSceneOrThrow(text: string): SvgScene {
   const sanitized = sanitizeSvg(text);
   const notices = new Set(sanitized.notices);
 
@@ -50,10 +93,9 @@ export function parseSvgOrThrow(text: string): SVGGeometry {
     console.warn = originalWarn;
   }
 
-  const shapes: SVGShape[] = [];
+  const elements: SceneElement[] = [];
   const clipRegions: Record<string, SVGShape[]> = {};
-  let strokeOnly = 0;
-  let invisible = 0;
+  let invisibleCount = 0;
 
   for (const shapePath of data.paths) {
     const userData = (shapePath.userData ?? {}) as { node?: Element; style?: LoaderStyle };
@@ -62,7 +104,7 @@ export function parseSvgOrThrow(text: string): SVGGeometry {
     const elementName = node ? (node.localName || node.nodeName).toLowerCase() : 'path';
     const subPaths = toSubPaths(shapePath);
     if (subPaths.length === 0) continue;
-    const fillRule = style.fillRule === 'evenodd' ? 'evenodd' : 'nonzero';
+    const fillRule: SVGFillRule = style.fillRule === 'evenodd' ? 'evenodd' : 'nonzero';
 
     const clipGeometry = node?.closest(`[${CLIP_GEOMETRY_ATTR}]`);
     if (clipGeometry) {
@@ -72,18 +114,17 @@ export function parseSvgOrThrow(text: string): SVGGeometry {
     }
 
     if (style.visibility === 'hidden' || style.opacity === 0) {
-      invisible++;
+      invisibleCount++;
       continue;
     }
     // Een <line> wordt in SVG nooit gevuld, ook al heeft hij een fill.
     const filled = elementName !== 'line' && isPainted(style.fill) && style.fillOpacity !== 0;
     const stroked = isPainted(style.stroke) && (style.strokeWidth ?? 1) > 0 && style.strokeOpacity !== 0;
-    if (!filled) {
-      if (stroked) strokeOnly++;
-      else invisible++;
+    if (!filled && !stroked) {
+      invisibleCount++;
       continue;
     }
-    if (stroked) notices.add('Omlijningen (stroke) worden genegeerd: enkel de gevulde vorm telt.');
+    if (filled && stroked) notices.add('Omlijningen (stroke) van gevulde vormen worden genegeerd: enkel de gevulde vorm telt.');
 
     const clipIds: string[] = [];
     let el: Element | null = node ?? null;
@@ -92,9 +133,40 @@ export function parseSvgOrThrow(text: string): SVGGeometry {
       if (key) clipIds.push(key);
       el = el.parentElement;
     }
-    shapes.push({ subPaths, fillRule, clipIds, elementName });
+    elements.push({
+      index: elements.length,
+      elementName,
+      kind: filled ? 'fill' : 'stroke',
+      subPaths,
+      fillRule,
+      clipIds,
+      paint: ((filled ? style.fill : style.stroke) ?? '').trim().toLowerCase(),
+    });
   }
 
+  if (invisibleCount > 0) notices.add('Onzichtbare vormen in de SVG worden genegeerd.');
+  if (elements.length === 0) fail('SVG_EMPTY', 'Er werd geen zichtbare vorm of lijn gevonden in deze SVG.');
+
+  return { frame: sanitized.frame, elements, clipRegions, invisibleCount, notices: [...notices] };
+}
+
+export function parseSvgScene(text: string): Result<SvgScene> {
+  return toResult(() => parseSvgSceneOrThrow(text));
+}
+
+/**
+ * Strikte, klassieke lezing "de hele SVG is één gevulde vorm", gebruikt
+ * door `buildContour`/`generateModel` (bibliotheekfuncties en tests). De
+ * applicatie zelf gebruikt de rolgebaseerde keten (`svgPaths.ts`), zodat
+ * meerdere losse vormen of open lijnen nooit al bij het importeren een
+ * fout opleveren.
+ */
+export function parseSvgOrThrow(text: string): SVGGeometry {
+  const scene = parseSvgSceneOrThrow(text);
+  const shapes: SVGShape[] = scene.elements
+    .filter((e) => e.kind === 'fill')
+    .map((e) => ({ subPaths: e.subPaths, fillRule: e.fillRule, clipIds: e.clipIds, elementName: e.elementName }));
+  const strokeOnly = scene.elements.length - shapes.length;
   if (strokeOnly > 0) {
     fail(
       'SVG_STROKE_ONLY',
@@ -103,12 +175,7 @@ export function parseSvgOrThrow(text: string): SVGGeometry {
         : 'De SVG bevat enkel lijnen zonder vulling (open contour). Gebruik een gesloten, gevulde vorm.',
     );
   }
-  if (invisible > 0) notices.add('Onzichtbare vormen in de SVG worden genegeerd.');
-  if (shapes.length === 0) {
-    fail('SVG_EMPTY', 'Er werd geen gevulde vorm gevonden in deze SVG.');
-  }
-
-  return { frame: sanitized.frame, shapes, clipRegions, notices: [...notices] };
+  return { frame: scene.frame, shapes, clipRegions: scene.clipRegions, notices: scene.notices };
 }
 
 export function parseSvg(text: string): Result<SVGGeometry> {

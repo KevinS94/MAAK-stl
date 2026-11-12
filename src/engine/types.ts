@@ -4,20 +4,30 @@
  */
 import type { Curve, Vector2 } from 'three';
 
-export type GeneratorType = 'cookieCutter' | 'fillingMold';
+export type GeneratorType = 'cookieCutter' | 'fillingMold' | 'stamp' | 'cutterStamp';
 
 export type ApplicationMode = 'basis' | 'expert';
 
-/** De vier parameters uit Expertmodus (alle waarden in mm). */
-export interface ShapeParameters {
-  /** Afmeting van het volledige SVG-kader in X-richting (mm). */
-  length: number;
-  /** Afmeting van het volledige SVG-kader in Y-richting (mm). */
-  width: number;
-  /** Totale hoogte van het object (mm). */
-  height: number;
-  /** Wanddikte (mm). */
-  wallThickness: number;
+/**
+ * Parameterwaarden van een generator (alle waarden in mm). Elke generator
+ * bepaalt zelf welke sleutels relevant zijn via zijn `ParamSpec[]`
+ * (zie `generators/types.ts`); hier blijft dit een open record zodat
+ * cookie cutter/vulvorm (lengte, breedte, hoogte, wanddikte) en de nieuwe
+ * stempelgeneratoren (andere sleutels) dezelfde machinerie kunnen delen.
+ */
+export type ShapeParameters = Record<string, number>;
+
+/** Eén instelbare parameter: grenzen, standaardwaarde en Nederlands label. */
+export interface ParamSpec {
+  key: string;
+  label: string;
+  hint: string;
+  min: number;
+  max: number;
+  step: number;
+  default: number;
+  /** Optioneel groepslabel (bv. "Cookie cutter" / "Stempel" bij Cutter & Stempel). */
+  group?: string;
 }
 
 export interface Point2 {
@@ -160,7 +170,12 @@ export type GeometryErrorCode =
   | 'SHAPE_TOO_NARROW'
   | 'FLARE_INVALID'
   | 'TRIANGULATION_FAILED'
-  | 'MESH_INVALID';
+  | 'MESH_INVALID'
+  | 'NO_OUTER_SELECTED'
+  | 'CONTOUR_RELIEF_INVALID'
+  | 'DETAIL_INVALID'
+  | 'HANDLE_INVALID'
+  | 'STAMP_FIT_INVALID';
 
 /** Gestructureerde fout met een korte Nederlandse melding. */
 export interface GeometryValidationError {
@@ -178,4 +193,83 @@ export interface GenerationResult {
   report: MeshReport;
   contour: ValidatedContour;
   notices: string[];
+}
+
+/** Resultaat van Cutter & Stempel: twee onafhankelijke, gevalideerde modellen. */
+export interface ComboGenerationResult {
+  generator: GeneratorType;
+  parameters: ShapeParameters;
+  cutter: { mesh: MeshData; report: MeshReport };
+  stamp: { mesh: MeshData; report: MeshReport };
+  contour: ValidatedContour;
+  notices: string[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Universele SVG-padselectie (meerdere vectorpaden + open lijnen)    */
+/* ------------------------------------------------------------------ */
+
+/** Rol die de gebruiker aan één geselecteerd vectorpad toekent. */
+export type PathRole = 'outer' | 'detail' | 'ignore';
+
+/**
+ * Eén selecteerbaar onderdeel van de SVG (stap B), in mm, nog NIET
+ * gecentreerd (zelfde kadertransformatie als de contour).
+ *
+ * - `region`: zichtbaar gevuld gebied, NA het toepassen van alle
+ *   clipPaths. Bij de standaardgroepering is dit een "logische vorm": de
+ *   samenhangende zichtbare stukken van één kleur (en geometrie die
+ *   daaronder volledig verborgen ligt) samen. Een getekende dikke rand is
+ *   hier een band met een gat.
+ * - `line`: een omlijning zonder vulling (open of gesloten polylijn).
+ */
+export interface SvgPathCandidate {
+  /** Stabiele id binnen één SVG-bestand, bv. "s0" (vorm) of "e3.1" (onderdeel). */
+  id: string;
+  kind: 'region' | 'line';
+  /** Id's van de afzonderlijke zichtbare stukken (granulariteit "elements") in dit onderdeel. */
+  memberIds: string[];
+  /** Indices (tekenvolgorde) van de SVG-elementen waaruit dit onderdeel opgebouwd is. */
+  elementIndices: number[];
+  /** Eerste/belangrijkste elementnaam (voor de lijst). */
+  elementName: string;
+  /** Gevuld gebied (`region`) of enkel een omlijning (`line`). */
+  filled: boolean;
+  /** Gesloten: altijd bij `region`; bij `line` als het pad gesloten is. */
+  closed: boolean;
+  /** `line`: de polylijn. `region`: de buitenrand van het grootste eiland. */
+  ring: Point2[];
+  /** Enkel bij `region`: het volledige zichtbare gebied (eilanden met gaten). */
+  region?: { outers: Ring[]; holes: Ring[] };
+  /** Netto zichtbare oppervlakte (mm²); 0 voor open lijnen. */
+  areaMm2: number;
+  /** Oppervlakte binnen de buitenrand(en), gaten opgevuld (mm²). */
+  silhouetteAreaMm2: number;
+  lengthMm: number;
+  bounds: Bounds2;
+  /** Kleur in de SVG (genormaliseerd), informatief. */
+  paint: string;
+  suggestedRole: PathRole;
+}
+
+/**
+ * Eén stempeldetail, uitgelijnd met de gekozen buitencontour (mm, gecentreerd).
+ * - Zonder `region`: een lijn (open of gesloten) die met de ingestelde
+ *   detailbreedte tot een band wordt verbreed.
+ * - Met `region`: een reeds gevulde vorm/band uit de SVG; die wordt exact
+ *   zo gebruikt (NIET opnieuw verbreed), zodat de getekende breedte blijft.
+ */
+export interface DetailLine {
+  ring: Point2[];
+  closed: boolean;
+  region?: { outers: Ring[]; holes: Ring[] };
+}
+
+/** Resultaat van de padselectie: gekozen buitencontour + bijpassende details. */
+export interface PathSelection {
+  candidates: SvgPathCandidate[];
+  /** candidate.id -> rol. */
+  roles: Record<string, PathRole>;
+  /** Of de selectie automatisch en ondubbelzinnig bepaald kon worden. */
+  unambiguous: boolean;
 }

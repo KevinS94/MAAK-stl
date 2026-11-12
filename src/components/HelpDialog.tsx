@@ -43,7 +43,10 @@ export function HelpDialog({ open, onClose }: HelpDialogProps) {
         <h3>Een SVG maken in Canva</h3>
         <ol className="steps">
           <li>Maak een ontwerp met een eigen formaat van <strong>100 × 100 mm</strong>.</li>
-          <li>Plaats één eenvoudige, gesloten, gevulde vorm in het frame.</li>
+          <li>
+            Plaats een gesloten vorm in het frame: een gevulde vorm of een dikke, gesloten rand. Lijnen of vormen binnenin
+            kun je na het uploaden als stempeldetail kiezen.
+          </li>
           <li>Gebruik geen foto's, rasterafbeeldingen, tekst of achtergrondvormen.</li>
           <li>Kies <em>Delen → Downloaden → SVG</em> en vink <em>Transparante achtergrond</em> aan als die optie er is.</li>
           <li>Upload het bestand hier en klik op Start.</li>

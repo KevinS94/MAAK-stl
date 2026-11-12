@@ -30,17 +30,33 @@ export function exportBinaryStl(mesh: MeshData): ArrayBuffer {
 const GENERATOR_SLUG: Record<GeneratorType, string> = {
   cookieCutter: 'cookie-cutter',
   fillingMold: 'vulvorm',
+  stamp: 'stempel',
+  cutterStamp: 'cutter-stempel',
 };
+
+function slugify(sourceFileName: string): string {
+  const base = sourceFileName.replace(/\.[^.]*$/, '');
+  return (
+    base
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'vorm'
+  );
+}
 
 /** `maak-cookie-cutter-hart.stl` op basis van de oorspronkelijke bestandsnaam. */
 export function stlFileName(generator: GeneratorType, sourceFileName: string): string {
-  const base = sourceFileName.replace(/\.[^.]*$/, '');
-  const slug = base
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-  return `maak-${GENERATOR_SLUG[generator]}-${slug || 'vorm'}.stl`;
+  return `maak-${GENERATOR_SLUG[generator]}-${slugify(sourceFileName)}.stl`;
+}
+
+/** Twee bestandsnamen voor Cutter & Stempel: `maak-cutter-stempel-cutter-hart.stl` / `...-stempel-hart.stl`. */
+export function comboStlFileNames(sourceFileName: string): { cutter: string; stamp: string } {
+  const slug = slugify(sourceFileName);
+  return {
+    cutter: `maak-cutter-stempel-cutter-${slug}.stl`,
+    stamp: `maak-cutter-stempel-stempel-${slug}.stl`,
+  };
 }

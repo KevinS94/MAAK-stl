@@ -71,7 +71,7 @@ export function SVGUploader({ file, preview, previewError, disabled, onFile, onE
             <UploadIcon />
             <span className="dropzone__title">Upload je SVG-bestand</span>
             <span className="dropzone__hint">Sleep je bestand hierheen of klik om te kiezen</span>
-            <span className="dropzone__meta">SVG · één gesloten vorm · Canva-frame van 100 × 100 mm</span>
+            <span className="dropzone__meta">SVG · vormen en lijnen · Canva-frame van 100 × 100 mm</span>
           </button>
         )}
 

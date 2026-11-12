@@ -1,0 +1,45 @@
+name: CI voor pull requests en featurebranches
+
+# Draait op elke pull request richting main en op elke push naar een
+# andere branch dan main. Publiceert NOOIT naar GitHub Pages (dat doet
+# uitsluitend deploy.yml, bij een push naar main).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches-ignore: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository uitchecken
+        uses: actions/checkout@v4
+
+      - name: Node.js instellen
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Afhankelijkheden installeren
+        run: npm ci
+
+      - name: TypeScript-controle
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Productiebuild
+        run: npm run build
+
+      - name: Playwright-browsers installeren
+        run: npx playwright install --with-deps chromium
+
+      - name: Browsertests (e2e)
+        run: npm run test:e2e

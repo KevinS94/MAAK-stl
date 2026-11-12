@@ -66,7 +66,7 @@ describe('vulvorm: exacte waarden en randgevallen', () => {
   });
 
   it('binnenruimte die verdwijnt geeft een foutmelding', () => {
-    const r = fillingMoldGenerator.generate(contourOf(SVG.tiny), P);
+    const r = fillingMoldGenerator.generate(contourOf(SVG.tiny), [], P);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('SHAPE_TOO_NARROW');
     expect(() => buildFillingMold(contourOf(SVG.tiny), P)).toThrow(GeometryError);
